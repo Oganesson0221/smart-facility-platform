@@ -1,0 +1,16 @@
+.env
+.venv/
+.app-venv/
+.nemo-venv/
+.nat-config/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+data/*
+!data/.gitkeep
+uploads/*
+!uploads/.gitkeep
+evidence/*
+!evidence/.gitkeep
+*.log

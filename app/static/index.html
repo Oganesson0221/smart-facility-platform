@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07130f">
+  <title>Smart Facility Platform</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Smart Facility Platform dashboard">
+        <span class="brand-mark"><span></span></span>
+        <span><strong>Smart Facility</strong><small>Platform · AI operations</small></span>
+      </a>
+      <nav>
+        <button class="nav-item active" data-view="overview">
+          <span class="nav-icon">⌂</span><span>Overview</span>
+        </button>
+        <button class="nav-item" data-view="analyse">
+          <span class="nav-icon">⌗</span><span>Visual inspection</span>
+        </button>
+        <button class="nav-item" data-view="cameras">
+          <span class="nav-icon">◉</span><span>Cameras</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-icon">⚙</span><span>Platform</span>
+        </button>
+      </nav>
+      <div class="side-foot">
+        <div class="safety-note">
+          <span class="pulse"></span>
+          <div><strong>Human in the loop</strong><small>Advisory actions only</small></div>
+        </div>
+        <span class="version">LOCAL AI · NVIDIA NEMO</span>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="pageEyebrow">Operations</p>
+          <h1 id="pageTitle">Facility overview</h1>
+        </div>
+        <div class="header-actions">
+          <div class="system-pill"><span class="status-dot"></span><span id="systemText">Checking system</span></div>
+          <button class="button primary compact" data-go="analyse">Run analysis <span>↗</span></button>
+        </div>
+      </header>
+
+      <section class="runtime-strip" aria-label="Runtime status">
+        <div class="runtime-label">
+          <span class="runtime-kicker">SYSTEM</span>
+          <strong>Local safety pipeline</strong>
+        </div>
+        <div class="runtime-node" id="visionRuntime">
+          <span class="runtime-dot"></span>
+          <div><small>VISION</small><strong id="visionRuntimeText">Checking model</strong></div>
+        </div>
+        <span class="runtime-arrow">→</span>
+        <div class="runtime-node" id="agentRuntime">
+          <span class="runtime-dot"></span>
+          <div><small>AGENT</small><strong id="agentRuntimeText">Checking NeMo</strong></div>
+        </div>
+        <span class="runtime-arrow">→</span>
+        <div class="runtime-node" id="telegramRuntime">
+          <span class="runtime-dot"></span>
+          <div><small>ALERTING</small><strong id="telegramRuntimeText">Checking Telegram</strong></div>
+        </div>
+      </section>
+
+      <section class="view active" id="view-overview">
+        <div class="hero">
+          <div>
+            <p class="eyebrow mint">Smart Facility Platform</p>
+            <h2>See risk. Act before<br>it escalates.</h2>
+            <p>Local multimodal intelligence detects safety violations, grounds decisions in your operating procedures, and coordinates a traceable response.</p>
+            <div class="hero-actions">
+              <button class="button bright" data-go="analyse">Start visual analysis</button>
+              <button class="button ghost" id="refreshOverview">Refresh operations</button>
+            </div>
+            <div class="hero-trust">
+              <span>● Local inference</span>
+              <span>● NeMo orchestrated</span>
+              <span>● Human controlled</span>
+            </div>
+          </div>
+          <div class="hero-visual">
+            <div class="scan-card">
+              <div class="scan-head"><span>South Exit Camera</span><span class="live-badge">DEMO READY</span></div>
+              <div class="scan-scene">
+                <img src="/api/demo/frame" alt="Synthetic fire exit scene">
+                <div class="roi-box"><span>EXIT ROI</span></div>
+                <div class="object-box"><span>vehicle · obstruction</span></div>
+                <div class="scan-line"></div>
+              </div>
+              <div class="scan-meta"><span>Spatial rules enabled</span><strong>NVIDIA-ready CV</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric">
+            <div class="metric-icon danger">!</div>
+            <div><span>Open incidents</span><strong id="statOpen">0</strong></div>
+            <small>Needs review</small>
+          </article>
+          <article class="metric">
+            <div class="metric-icon amber">✓</div>
+            <div><span>Acknowledged</span><strong id="statAck">0</strong></div>
+            <small>Response underway</small>
+          </article>
+          <article class="metric">
+            <div class="metric-icon green">◉</div>
+            <div><span>Configured cameras</span><strong id="statCameras">0</strong></div>
+            <small>ROI protected</small>
+          </article>
+          <article class="metric">
+            <div class="metric-icon slate">◎</div>
+            <div><span>False alarms</span><strong id="statFalse">0</strong></div>
+            <small>Use for tuning</small>
+          </article>
+        </div>
+
+        <div class="section-head">
+          <div><p class="eyebrow">Incident queue</p><h3>Recent detections</h3></div>
+          <div class="filters">
+            <button class="filter active" data-status="">All</button>
+            <button class="filter" data-status="open">Open</button>
+            <button class="filter" data-status="acknowledged">Acknowledged</button>
+          </div>
+        </div>
+        <div class="incident-list" id="incidentList">
+          <div class="empty-state">Loading incidents…</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-analyse">
+        <div class="work-grid">
+          <article class="panel canvas-panel">
+            <div class="panel-head">
+              <div><p class="eyebrow">Inspection workspace</p><h3>Visual analysis</h3></div>
+              <div class="segmented">
+                <button class="active" data-media="image">Image</button>
+                <button data-media="video">Video</button>
+              </div>
+            </div>
+            <div class="camera-stage" id="cameraStage">
+              <canvas id="roiCanvas" width="1100" height="720"></canvas>
+              <div class="stage-placeholder" id="stagePlaceholder">
+                <span class="upload-glyph">↥</span>
+                <strong>Drop an image or video</strong>
+                <small>or load the synthetic demo to test now</small>
+              </div>
+              <div class="draw-hint" id="drawHint">Optional: draw an exit zone for spatial monitoring</div>
+            </div>
+            <div class="stage-tools">
+              <label class="button ghost file-button">Select media<input id="mediaInput" type="file" accept="image/*"></label>
+              <button class="button ghost" id="demoButton">Use synthetic demo frame</button>
+              <button class="button subtle" id="resetPolygon">Reset polygon</button>
+            </div>
+          </article>
+
+          <aside class="panel control-panel">
+            <div class="panel-head"><div><p class="eyebrow">Analysis policy</p><h3>Inspection setup</h3></div></div>
+            <div class="workflow-steps" aria-label="Analysis workflow">
+              <span><b>1</b> Inspect</span><i></i>
+              <span><b>2</b> Annotate</span><i></i>
+              <span><b>3</b> Escalate</span>
+            </div>
+            <label class="field"><span>Camera</span><select id="cameraSelect"></select></label>
+            <div class="field-row">
+              <label class="field"><span>Min. overlap</span><input id="overlapInput" type="number" min="0" max="1" step=".05" value=".25"></label>
+              <label class="field"><span>Persistence</span><input id="durationInput" type="number" min="0" step="1" value="5"><i>seconds</i></label>
+            </div>
+            <label class="field"><span>Blocked classes</span><textarea id="classesInput" rows="3">vehicle, trolley, pallet, box, large object</textarea></label>
+            <div class="zone-status ready" id="zoneStatus"><span>✦</span><div><strong>Automatic scene reasoning</strong><small>No polygon needed for images</small></div></div>
+            <button class="button bright full" id="analyseButton" disabled>
+              <span id="analyseLabel">Analyse image</span><span>→</span>
+            </button>
+            <p class="privacy-copy">Media and model inference stay on this machine. Configured recipients receive annotated incident alerts.</p>
+          </aside>
+        </div>
+        <div id="analysisResult" class="result-area"></div>
+      </section>
+
+      <section class="view" id="view-cameras">
+        <div class="section-head">
+          <div><p class="eyebrow">Configuration</p><h3>Protected exits</h3></div>
+          <button class="button primary" id="newCameraButton">Add camera</button>
+        </div>
+        <div class="camera-grid" id="cameraGrid"></div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="settings-intro">
+          <p class="eyebrow mint">Runtime</p>
+          <h2>Private intelligence.<br>Operational control.</h2>
+          <p>Vision inference, incident history, and SOP retrieval stay on this facility host. NVIDIA NeMo coordinates the response workflow; external alerting remains explicit and observable.</p>
+        </div>
+        <div class="settings-grid">
+          <article class="setting-card">
+            <div class="setting-symbol nvidia">N</div>
+            <div><span class="tag">COMPUTER VISION</span><h3 id="detectorName">Loading…</h3><p id="detectorStatus">Checking detector status.</p></div>
+          </article>
+          <article class="setting-card">
+            <div class="setting-symbol llm">✦</div>
+            <div><span class="tag">LOCAL LLM</span><h3 id="llmName">Loading…</h3><p id="llmStatus">Checking local model configuration.</p></div>
+          </article>
+          <article class="setting-card">
+            <div class="setting-symbol telegram">↗</div>
+            <div><span class="tag">NOTIFICATIONS</span><h3 id="telegramName">Loading…</h3><p id="telegramStatus">Message @SmartFacilityAssistant_bot with /start to receive annotated image alerts.</p><button class="text-button" id="telegramTest">Send test alert →</button></div>
+          </article>
+          <article class="setting-card">
+            <div class="setting-symbol sop">≡</div>
+            <div><span class="tag">KNOWLEDGE</span><h3>Local SOP retrieval</h3><p>Recommendations are generated only from Markdown SOPs in the repository.</p></div>
+          </article>
+        </div>
+        <article class="panel env-panel">
+          <div><p class="eyebrow">Secrets and configuration</p><h3>Use the local <code>.env</code> file</h3><p>Copy <code>.env.example</code> to <code>.env</code>. It is Git-ignored and is never exposed through this dashboard.</p></div>
+          <a href="/docs" target="_blank" class="button ghost">Open API docs</a>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="incidentDrawer">
+    <button class="drawer-close" id="drawerClose">×</button>
+    <div id="drawerContent"></div>
+  </aside>
+
+  <dialog id="cameraDialog">
+    <form method="dialog" id="cameraForm">
+      <div class="dialog-head"><div><p class="eyebrow">Camera configuration</p><h3 id="cameraDialogTitle">Add protected exit</h3></div><button value="cancel">×</button></div>
+      <input type="hidden" id="cameraId">
+      <div class="field-row">
+        <label class="field"><span>Camera name</span><input id="cameraName" required></label>
+        <label class="field"><span>Facility</span><input id="cameraFacility" required></label>
+      </div>
+      <label class="field"><span>Zone / exit name</span><input id="cameraZone" required></label>
+      <label class="field"><span>RTSP URL (stored only; ingestion comes in production phase)</span><input id="cameraRtsp" placeholder="rtsp://…"></label>
+      <div class="field-row">
+        <label class="field"><span>Minimum overlap</span><input id="cameraOverlap" type="number" min="0" max="1" step=".05" value=".25"></label>
+        <label class="field"><span>Persistence seconds</span><input id="cameraPersistence" type="number" min="0" value="5"></label>
+      </div>
+      <button class="button bright full" value="default" id="saveCamera">Save camera</button>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
