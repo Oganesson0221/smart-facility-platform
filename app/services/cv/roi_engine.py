@@ -5,10 +5,10 @@ from app.services.cv.types import Detection, Obstruction
 
 def validate_polygon(points: list[list[float]]) -> Polygon:
     if len(points) < 3:
-        raise ValueError("The exit zone needs at least three points")
+        raise ValueError("The monitored zone needs at least three points")
     polygon = Polygon(points)
     if not polygon.is_valid or polygon.area <= 0:
-        raise ValueError("The exit zone polygon is invalid")
+        raise ValueError("The monitored zone polygon is invalid")
     return polygon
 
 

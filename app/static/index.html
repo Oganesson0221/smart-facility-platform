@@ -91,11 +91,11 @@
           </div>
           <div class="hero-visual">
             <div class="scan-card">
-              <div class="scan-head"><span>South Exit Camera</span><span class="live-badge">DEMO READY</span></div>
+              <div class="scan-head"><span>South Access Camera</span><span class="live-badge">DEMO READY</span></div>
               <div class="scan-scene">
-                <img src="/api/demo/frame" alt="Synthetic fire exit scene">
-                <div class="roi-box"><span>EXIT ROI</span></div>
-                <div class="object-box"><span>vehicle · obstruction</span></div>
+                <img src="/api/demo/frame" alt="Synthetic monitored access scene">
+                <div class="roi-box"><span>MONITORED ZONE</span></div>
+                <div class="object-box"><span>vehicle · access risk</span></div>
                 <div class="scan-line"></div>
               </div>
               <div class="scan-meta"><span>Spatial rules enabled</span><strong>NVIDIA-ready CV</strong></div>
@@ -156,7 +156,7 @@
                 <strong>Drop an image or video</strong>
                 <small>or load the synthetic demo to test now</small>
               </div>
-              <div class="draw-hint" id="drawHint">Optional: draw an exit zone for spatial monitoring</div>
+              <div class="draw-hint" id="drawHint">Optional: draw a monitored zone for spatial analysis</div>
             </div>
             <div class="stage-tools">
               <label class="button ghost file-button">Select media<input id="mediaInput" type="file" accept="image/*"></label>
@@ -190,7 +190,7 @@
 
       <section class="view" id="view-cameras">
         <div class="section-head">
-          <div><p class="eyebrow">Configuration</p><h3>Protected exits</h3></div>
+          <div><p class="eyebrow">Configuration</p><h3>Monitored zones</h3></div>
           <button class="button primary" id="newCameraButton">Add camera</button>
         </div>
         <div class="camera-grid" id="cameraGrid"></div>
@@ -237,13 +237,13 @@
 
   <dialog id="cameraDialog">
     <form method="dialog" id="cameraForm">
-      <div class="dialog-head"><div><p class="eyebrow">Camera configuration</p><h3 id="cameraDialogTitle">Add protected exit</h3></div><button value="cancel">×</button></div>
+      <div class="dialog-head"><div><p class="eyebrow">Camera configuration</p><h3 id="cameraDialogTitle">Add monitored zone</h3></div><button value="cancel">×</button></div>
       <input type="hidden" id="cameraId">
       <div class="field-row">
         <label class="field"><span>Camera name</span><input id="cameraName" required></label>
         <label class="field"><span>Facility</span><input id="cameraFacility" required></label>
       </div>
-      <label class="field"><span>Zone / exit name</span><input id="cameraZone" required></label>
+      <label class="field"><span>Zone name</span><input id="cameraZone" required></label>
       <label class="field"><span>RTSP URL (stored only; ingestion comes in production phase)</span><input id="cameraRtsp" placeholder="rtsp://…"></label>
       <div class="field-row">
         <label class="field"><span>Minimum overlap</span><input id="cameraOverlap" type="number" min="0" max="1" step=".05" value=".25"></label>

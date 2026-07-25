@@ -106,7 +106,7 @@ def _keyboard(incident_id: str) -> dict:
 
 def _alert_text(incident) -> str:
     event_name = (
-        "EXIT OBSTRUCTION"
+        "ACCESS OBSTRUCTION"
         if incident.event_type == "exit_blocked"
         else incident.object_type.replace("_", " ").upper()
     )

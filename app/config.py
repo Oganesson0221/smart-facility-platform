@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     vision_enabled: bool = True
     vision_base_url: str = "http://127.0.0.1:11434"
-    vision_model: str = "qwen3-vl:30b"
+    vision_model: str = "gemma3:27b"
     vision_timeout_seconds: float = 180.0
 
     telegram_bot_token: str = ""

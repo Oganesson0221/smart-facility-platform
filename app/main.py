@@ -19,13 +19,14 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        if not db.scalar(select(Camera).limit(1)):
+        camera = db.get(Camera, "building-a-exit-south")
+        if camera is None and not db.scalar(select(Camera).limit(1)):
             db.add(
                 Camera(
                     id="building-a-exit-south",
-                    name="South Exit Camera",
+                    name="South Access Camera",
                     facility="Building A",
-                    zone="Fire Exit South",
+                    zone="South Access Zone",
                     exit_zone=[[250, 100], [850, 100], [850, 680], [250, 680]],
                     blocked_classes=sorted(settings.blocked_class_set),
                     confidence_threshold=settings.detection_threshold,
@@ -34,6 +35,12 @@ async def lifespan(_: FastAPI):
                     alert_cooldown_seconds=settings.alert_cooldown_seconds,
                 )
             )
+            db.commit()
+        elif camera is not None:
+            if camera.name == "South Exit Camera":
+                camera.name = "South Access Camera"
+            if camera.zone == "Fire Exit South":
+                camera.zone = "South Access Zone"
             db.commit()
         if settings.user_id:
             subscriber = db.get(TelegramSubscriber, settings.user_id)
@@ -64,7 +71,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="Local-first exit obstruction monitoring and incident orchestration.",
+    description="Local-first facility safety monitoring and incident orchestration.",
     lifespan=lifespan,
 )
 app.include_router(router)

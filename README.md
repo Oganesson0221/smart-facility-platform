@@ -1,6 +1,6 @@
 # Smart Facility Platform
 
-Local-first fire-exit obstruction monitoring with NVIDIA Grounding DINO support,
+Local-first facility safety and access monitoring with NVIDIA Grounding DINO support,
 incident tracking, SOP-grounded summaries, Telegram alerts, and a browser dashboard.
 
 The default `demo` detector has no model download and makes the complete workflow
@@ -17,7 +17,7 @@ pip install -r requirements.txt
 ```
 
 Open <http://127.0.0.1:8000>. The first start creates the local SQLite store and a
-sample camera. Draw an exit polygon on an uploaded image, then select **Analyse
+sample camera. Draw a monitored-zone polygon on an uploaded image, then select **Analyse
 image**. For an immediate end-to-end test, select **Use synthetic demo frame**.
 
 For uploaded images without an exit polygon, Smart Facility Platform uses a local
@@ -27,10 +27,10 @@ banner to the image, runs the SOP workflow, and sends the annotated image to
 Telegram. With Ollama installed, pull a vision-capable model:
 
 ```bash
-ollama pull qwen3-vl:30b
+ollama pull gemma3:27b
 ```
 
-Draw an exit polygon when you want deterministic protected-exit overlap rules.
+Draw a monitored-zone polygon when you want deterministic spatial overlap rules.
 
 ## NVIDIA Grounding DINO
 
@@ -64,7 +64,7 @@ backed by any local OpenAI-compatible model. The tested local setup is:
 ```dotenv
 VISION_ENABLED=true
 VISION_BASE_URL=http://127.0.0.1:11434
-VISION_MODEL=qwen3-vl:30b
+VISION_MODEL=gemma3:27b
 
 LLM_ENABLED=true
 LLM_BASE_URL=http://127.0.0.1:11434/v1
@@ -81,7 +81,7 @@ Start Ollama, the NeMo workflow, and the app in separate terminals:
 
 ```bash
 ollama serve
-ollama pull qwen3-vl:30b
+ollama pull gemma3:27b
 ollama pull qwen3:32b
 
 uv venv --python 3.11 .nemo-venv
@@ -113,7 +113,7 @@ Install and launch the lab with:
 
 ```bash
 source .app-venv/bin/activate
-python -m pip install -r requirements-lab.txt
+uv pip install --python .app-venv/bin/python -r requirements-lab.txt
 jupyter lab
 ```
 

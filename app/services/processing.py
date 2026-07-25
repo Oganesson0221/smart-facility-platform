@@ -344,7 +344,7 @@ def synthetic_demo_frame() -> np.ndarray:
     cv2.rectangle(image, (250, 100), (850, 680), (70, 83, 94), 8)
     cv2.rectangle(image, (285, 135), (815, 680), (37, 45, 55), -1)
     cv2.putText(
-        image, "FIRE EXIT", (405, 190), cv2.FONT_HERSHEY_DUPLEX, 1.5,
+        image, "KEEP CLEAR", (395, 190), cv2.FONT_HERSHEY_DUPLEX, 1.5,
         (245, 245, 245), 3, cv2.LINE_AA
     )
     cv2.rectangle(image, (350, 395), (780, 625), (42, 70, 150), -1)

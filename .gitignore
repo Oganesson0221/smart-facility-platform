@@ -6,6 +6,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ipynb_checkpoints/
 .coverage
 data/*
 !data/.gitkeep
@@ -13,4 +14,6 @@ uploads/*
 !uploads/.gitkeep
 evidence/*
 !evidence/.gitkeep
+lab_outputs/*
+!lab_outputs/.gitkeep
 *.log

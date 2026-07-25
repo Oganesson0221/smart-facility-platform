@@ -54,7 +54,7 @@ def _parse_polygon(raw: str, camera: Camera) -> list[list[float]]:
     except json.JSONDecodeError as exc:
         raise HTTPException(422, "exit_zone must be valid JSON") from exc
     if not polygon or len(polygon) < 3:
-        raise HTTPException(422, "Draw an exit zone with at least three points")
+        raise HTTPException(422, "Draw a monitored zone with at least three points")
     return polygon
 
 

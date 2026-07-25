@@ -59,7 +59,7 @@ function go(view) {
   const titles = {
     overview: ["Operations", "Facility overview"],
     analyse: ["Computer vision", "Analyse media"],
-    cameras: ["Configuration", "Protected exits"],
+    cameras: ["Configuration", "Monitored zones"],
     settings: ["Runtime", "System connections"],
   };
   $$(".view").forEach(el => el.classList.toggle("active", el.id === `view-${view}`));
@@ -93,7 +93,7 @@ async function loadHealth() {
     $("#detectorStatus").textContent = health.detector === "grounding_dino"
       ? "Open-vocabulary NVIDIA-ready detector selected. It loads on first analysis."
       : health.vision?.enabled
-        ? `${health.vision.model} reasons about uploaded images; the demo detector handles drawn exit zones.`
+        ? `${health.vision.model} reasons about uploaded images; the spatial detector evaluates drawn monitored zones.`
         : "Zero-download test provider. Switch DETECTOR_PROVIDER for GPU inference.";
     $("#llmName").textContent = health.nemo_agent?.enabled
       ? `${health.llm.model} · NeMo agent`
@@ -273,12 +273,12 @@ function updateZoneStatus() {
   const ready = state.polygon.length >= 3;
   $("#zoneStatus").classList.toggle("ready", ready);
   $("#zoneStatus").innerHTML = ready
-    ? `<span>◆</span><div><strong>Protected-exit mode</strong><small>${state.polygon.length} points · object overlap rules apply</small></div>`
+    ? `<span>◆</span><div><strong>Spatial policy active</strong><small>${state.polygon.length} points · object overlap rules apply</small></div>`
     : state.mediaMode === "image"
       ? `<span>✦</span><div><strong>Automatic scene reasoning</strong><small>Local vision model checks visible objects and signs</small></div>`
-      : `<span>◇</span><div><strong>No exit zone drawn</strong><small>Video monitoring requires at least three points</small></div>`;
+      : `<span>◇</span><div><strong>No monitored zone drawn</strong><small>Video monitoring requires at least three points</small></div>`;
   $("#analyseLabel").textContent = ready
-    ? (state.mediaMode === "image" ? "Analyse exit zone" : "Analyse video")
+    ? (state.mediaMode === "image" ? "Analyse monitored zone" : "Analyse video")
     : "Reason about scene";
   $("#analyseButton").disabled = !(state.file && (ready || state.mediaMode === "image"));
 }
@@ -398,7 +398,7 @@ function renderAnalysisResult(result) {
       <img src="${result.annotated_image}?t=${Date.now()}" alt="Annotated analysis result">
       <div class="result-copy">
         <p class="eyebrow ${blocked.length ? "" : "mint"}">${escapeHtml(result.provider)} analysis</p>
-        <h3>${blocked.length ? `${blocked.length} obstruction${blocked.length > 1 ? "s" : ""} detected` : "Exit zone is clear"}</h3>
+        <h3>${blocked.length ? `${blocked.length} obstruction${blocked.length > 1 ? "s" : ""} detected` : "Monitored zone is clear"}</h3>
         <p>${blocked.length
           ? `The spatial rule created ${result.incidents.length} incident record(s). Open the incident queue to review the SOP-grounded response.`
           : "Objects may have been detected, but none met the configured class and overlap rule."}</p>
@@ -449,7 +449,7 @@ async function pollJob(id) {
 
 function editCamera(id = "") {
   const camera = state.cameras.find(item => item.id === id);
-  $("#cameraDialogTitle").textContent = camera ? "Edit protected exit" : "Add protected exit";
+  $("#cameraDialogTitle").textContent = camera ? "Edit monitored zone" : "Add monitored zone";
   $("#cameraId").value = camera?.id || "";
   $("#cameraName").value = camera?.name || "";
   $("#cameraFacility").value = camera?.facility || "";
