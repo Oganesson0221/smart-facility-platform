@@ -1,0 +1,12 @@
+services:
+  smart-facility-platform:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./evidence:/app/evidence
+    restart: unless-stopped

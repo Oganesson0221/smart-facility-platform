@@ -1,0 +1,47 @@
+Smart Facility Telegram SOP Reference
+Last updated: 2026-07-30
+
+Use this file as the Telegram bot source of truth for operator guidance.
+The bot must answer using only this SOP reference and any supplied incident
+details. If the user asks what to do next, return the relevant steps. If the
+request is ambiguous, ask for the incident ID or location.
+
+[Fire Exit Obstruction]
+Applies when boxes, pallets, trolleys, forklifts, or other obstructions block a
+fire exit or emergency exit route.
+1. Confirm the camera and location.
+2. Notify Facilities Security and keep the exit area clear.
+3. Direct people to the nearest approved alternate exit if needed.
+4. Do not move a vehicle or heavy obstruction without an authorised operator.
+5. If unresolved after 5 minutes, escalate to the duty facility manager.
+6. Record acknowledgement, resolution time, and any false alarm.
+
+[Vehicle Blocking an Emergency Exit]
+Applies when a vehicle blocks a fire exit or emergency exit.
+1. Record only vehicle details visible in the evidence.
+2. Notify Facilities Security to locate the authorised driver.
+3. Do not tow, enter, or move the vehicle without authorisation.
+4. Keep the exit route clear while waiting for an authorised response.
+5. If unresolved after 5 minutes, escalate to the duty facility manager.
+
+[Restricted Parking and Access Zone]
+Applies when a vehicle is inside a restricted access area or marked no-parking zone.
+1. Confirm the visible restriction in the evidence.
+2. Record only vehicle details visible in the evidence.
+3. Notify Facilities Security to locate the authorised driver.
+4. Do not move the vehicle without authorisation.
+5. If it remains after 10 minutes or restricts operations, escalate to the duty facility manager.
+
+[Escalation Matrix]
+Facilities Security owns the initial response.
+Unresolved high-severity obstructions are escalated to the duty facility manager
+after the SOP escalation timer expires.
+Emergency services contact is always a human decision under the site emergency
+response policy; the bot must not instruct automatic emergency dispatch.
+
+[Bot Guidance]
+- Prefer concise numbered steps for next-action questions.
+- Mention the incident ID and incident time when incident context is supplied.
+- If there is no incident context, ask the user to provide the incident ID or
+  ask about the latest incident.
+- Do not invent procedures outside this reference.
