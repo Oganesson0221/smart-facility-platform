@@ -334,48 +334,7 @@ export SAM_ENABLED=false
 
 ### Quick Start
 
-For the simplest managed startup, use the lifecycle scripts below.
-
-### One-command whole-stack lifecycle
-
-Start the text model, vision model, NAT, and FastAPI app in dependency order:
-
-```bash
-./scripts/start-all.sh
-```
-
-The script waits for each health endpoint before starting its consumer. Model
-loading can take several minutes, especially after a reboot. It writes logs to
-`logs/` and PID/start-time records to `.runtime/`.
-
-Stop only the processes launched by that script, in reverse dependency order:
-
-```bash
-./scripts/stop-all.sh
-```
-
-The scripts are safe to run repeatedly. A service already reachable but not
-recorded in `.runtime/` is treated as external: startup reuses it and shutdown
-does not kill it. Stale PID records are checked against Linux process start
-times to avoid terminating an unrelated process that reused the same PID.
-
-Optional controls:
-
-```dotenv
-TEXT_START_TIMEOUT=900
-VISION_START_TIMEOUT=1200
-NEMO_START_TIMEOUT=180
-APP_START_TIMEOUT=180
-STACK_STOP_TIMEOUT=30
-STACK_LOG_DIR=/absolute/path/to/logs
-STACK_RUNTIME_DIR=/absolute/path/to/runtime-state
-START_RUN_CHECKS=false
-```
-
-Set `START_RUN_CHECKS=true` to run `scripts/check-local-ai.sh` after all four
-services become healthy.
-
-For manual startup, the normal order is:
+If you already have `.env` and `VISION_API_KEY` populated, the normal startup order is:
 
 1. Create the Python environments.
 2. Install app, NeMo, and optional SAM dependencies.
