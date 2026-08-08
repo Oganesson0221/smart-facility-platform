@@ -18,3 +18,15 @@ evidence/*
 lab_outputs/*
 !lab_outputs/.gitkeep
 *.log
+
+# Local AI models / weights
+models/nvidia/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+*.nemo
+
+# Local test / media artifacts
+tests/Download.mp4
