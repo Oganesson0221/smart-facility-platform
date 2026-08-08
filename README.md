@@ -30,7 +30,8 @@ This repo now runs as a layered NeMo-orchestrated system:
 
 3. `vLLM text server` on port `8001`
    - serves the control LLM for the NeMo tool-calling workflow
-   - default model: `google/gemma-4-12B-it`
+   - default model: `Qwen/Qwen2.5-7B-Instruct`
+   - vLLM automatic tool choice uses the Hermes parser
 
 4. `vLLM vision server` on port `8002`
    - serves the multimodal validation and scene model
@@ -51,7 +52,7 @@ This repo now runs as a layered NeMo-orchestrated system:
 Browser UI
   -> FastAPI app : uploads, incidents, camera config, health, dashboard
      -> NeMo Agent Toolkit : tool-calling orchestration on port 8010
-        -> vLLM text server : google/gemma-4-12B-it on port 8001
+        -> vLLM text server : Qwen/Qwen2.5-7B-Instruct on port 8001
         -> smart facility tools
            -> YOLO detector : yolo11n.pt
            -> SAM segmenter : sam2.1_hiera_tiny when enabled
@@ -65,7 +66,7 @@ Browser UI
 | Layer | Default runtime name | Role |
 | --- | --- | --- |
 | NeMo workflow name | `smart-facility-agent` | OpenAI-compatible workflow endpoint exposed by NeMo |
-| Text control model | `google/gemma-4-12B-it` | Tool-calling control LLM used by NeMo |
+| Text control model | `Qwen/Qwen2.5-7B-Instruct` | NAT tool selection and orchestration through vLLM Hermes parsing |
 | Vision model | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` | Multimodal scene and fire-exit validation |
 | Detector | `yolo11n.pt` | First-stage object detection |
 | Segmenter | `sam2.1_hiera_tiny` | Mask refinement for relevant detections when SAM is enabled |
@@ -91,6 +92,40 @@ Image or sampled video frame
 
 When `SAM_ENABLED=false`, the existing YOLO bounding-box overlap path remains
 active and backward compatible.
+
+### What each implementation layer does
+
+| Implementation | Responsibility |
+| --- | --- |
+| `app/services/nemo_agent_client.py` | Sends stage-specific requests to the `smart-facility-agent` OpenAI-compatible endpoint |
+| `nemo_agent/config.yml` | Configures Qwen as NAT's controller, tool iteration limits, and direct JSON tool results |
+| `nemo_agent/src/nat/plugins/smart_facility/` | Registers detector, segmenter, scene assessor, validator, and SOP tools |
+| `app/services/cv/detector.py` | Runs YOLO and normalizes classes, confidence, and boxes |
+| `app/services/cv/segmenter.py` | Uses each YOLO box as a SAM prompt and simplifies the resulting mask polygon |
+| `app/services/cv/roi_engine.py` | Calculates deterministic object-intrusion and exit-blockage ratios |
+| `app/services/scene_reasoning.py` | Sends images plus grounded detections to Nemotron and normalizes structured JSON |
+| `scripts/run-vllm-llm.sh` | Serves Qwen with Hermes tool parsing |
+| `scripts/run-vllm-vision.sh` | Serves the NVFP4 Nemotron image model |
+| `scripts/check-local-ai.sh` | Checks every service, model listing, and a real NAT detector call |
+
+NAT orchestrates AI calls but does not replace the safety-critical geometry.
+The app calculates polygon overlap and video persistence in ordinary code, so
+an LLM cannot invent the measurements that trigger an obstruction.
+
+### Orchestration sequence
+
+1. FastAPI stages the image under `uploads/nemo_staging/` for NAT tools.
+2. Qwen selects `facility_object_detector`; the tool runs YOLO11n.
+3. The app filters obstruction classes and performs a cheap box/zone pre-check.
+4. For qualifying boxes, Qwen selects `facility_segmenter`; SAM 2.1 produces a mask.
+5. The app calculates mask intrusion and exit blockage deterministically.
+6. Video additionally requires the same tracked blockage to persist for the configured duration.
+7. `facility_fire_exit_validator` passes only a qualifying image and grounded measurements to Nemotron.
+8. NAT can retrieve the local SOP; the app creates evidence, updates the dashboard, and optionally alerts Telegram.
+
+For an image without a polygon, `facility_scene_assessor` sends YOLO-grounded
+detections and the image to Nemotron. Nemotron is the image-understanding
+model in both flows; Qwen is the text-only controller that selects NAT tools.
 
 ## Why YOLO and SAM are both used
 
@@ -233,14 +268,13 @@ VISION_VALIDATION_FAIL_CLOSED=false
 
 LLM_ENABLED=true
 LLM_BASE_URL=http://127.0.0.1:8001/v1
-LLM_MODEL=google/gemma-4-12B-it
-LLM_MODEL_SOURCE=/absolute/path/to/models/google/gemma-4-12B-it
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_SOURCE=/absolute/path/to/models/Qwen/Qwen2.5-7B-Instruct
 LLM_MAX_MODEL_LEN=8192
 LLM_GPU_MEMORY_UTILIZATION=0.35
 LLM_API_KEY=
-LLM_TOOL_CALL_PARSER=gemma4
-LLM_REASONING_PARSER=gemma4
-GEMMA4_CHAT_TEMPLATE=/absolute/path/to/tool_chat_template_gemma4.jinja
+LLM_TOOL_CALL_PARSER=hermes
+LLM_REASONING_PARSER=
 
 NEMO_AGENT_ENABLED=true
 NEMO_AGENT_BASE_URL=http://127.0.0.1:8010/v1
@@ -255,8 +289,20 @@ VISION_MODEL=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
 VISION_MODEL_SOURCE=/absolute/path/to/models/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
 VISION_MAX_MODEL_LEN=8192
 VISION_GPU_MEMORY_UTILIZATION=0.45
+VISION_MOE_BACKEND=marlin
+VISION_ENABLE_THINKING=false
+VISION_VALIDATION_MAX_RESPONSE_TOKENS=300
 VISION_API_KEY=
 ```
+
+On DGX Spark/GB10, do not force `VISION_MOE_BACKEND=triton` for the NVFP4
+checkpoint. vLLM rejects Triton for NVFP4 MoE. This repo uses `marlin` on the
+tested GB10 because it starts reliably without a large first-run FlashInfer
+kernel build. Marlin is weight-only FP4 and may be slower, so a compatible
+FlashInfer/CUTLASS backend remains an optional performance experiment.
+
+For a Qwen 2.5 control model, `run-vllm-llm.sh` automatically enables vLLM
+automatic tool choice with the Hermes parser. This is required for NAT tools.
 
 Token notes:
 
@@ -269,7 +315,7 @@ Token notes:
 - Use `LLM_MODEL_SOURCE` and `VISION_MODEL_SOURCE` only when vLLM should load weights from an absolute local directory.
 - Keep `LLM_MAX_MODEL_LEN` and `VISION_MAX_MODEL_LEN` modest for local dual-model serving. Extremely large values such as `262144` can reserve tens of GiB of KV cache and prevent the text and vision servers from staying up together.
 - Keep `LLM_GPU_MEMORY_UTILIZATION` and `VISION_GPU_MEMORY_UTILIZATION` split conservatively when both servers share one GPU. The repo defaults target local dual-model serving rather than single-model maximum throughput.
-- If you switch the text control model away from Gemma 4, set `LLM_TOOL_CALL_PARSER` and `LLM_REASONING_PARSER` to the vLLM parser required by that model.
+- If you switch away from Qwen 2.5, use the tool and reasoning parsers supported by that model and vLLM version.
 
 Set the SAM checkpoint path explicitly:
 
@@ -373,9 +419,9 @@ and start the servers.
 ./scripts/run-vllm-vision.sh
 ```
 
-When serving `google/gemma-4-12B-it` through vLLM for NeMo tool orchestration,
-set `GEMMA4_CHAT_TEMPLATE` to the Gemma 4 tool-use chat template recommended by
-the current vLLM documentation.
+Wait until `curl http://127.0.0.1:8001/v1/models` lists
+`Qwen/Qwen2.5-7B-Instruct` before starting NAT. The launcher enables Qwen 2.5
+Hermes-compatible automatic tool parsing, which NAT requires.
 
 8. Start the NeMo Agent Toolkit server in a third terminal:
 
@@ -488,8 +534,8 @@ To serve already-downloaded local folders while keeping stable model names for
 the app and NeMo:
 
 ```dotenv
-LLM_MODEL=google/gemma-4-12B-it
-LLM_MODEL_SOURCE=/srv/local-models/google/gemma-4-12B-it
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_SOURCE=/srv/local-models/Qwen/Qwen2.5-7B-Instruct
 
 VISION_MODEL=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
 VISION_MODEL_SOURCE=/srv/local-models/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
@@ -498,6 +544,53 @@ VISION_MODEL_SOURCE=/srv/local-models/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reason
 `LLM_MODEL` and `VISION_MODEL` are the served names exposed by the local
 OpenAI-compatible endpoints. `LLM_MODEL_SOURCE` and `VISION_MODEL_SOURCE` are
 the on-disk folders that vLLM loads.
+
+### Reusing Nemotron from Reachy Mini or another repository
+
+Yes. The safest design is to run **one** Nemotron vLLM server and let both
+projects call its OpenAI-compatible API. Reachy Mini does not need to copy,
+move, or modify this repository's model folder.
+
+Configure `/home/admin/Documents/reachy_mini_asl_qa` (or another project) with:
+
+```dotenv
+VISION_BASE_URL=http://127.0.0.1:8002/v1
+VISION_MODEL=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+VISION_API_KEY=
+```
+
+A minimal OpenAI-compatible Python client is:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8002/v1",
+    api_key="not-required",  # Use the configured key if vLLM is protected.
+)
+result = client.chat.completions.create(
+    model="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+    messages=[{"role": "user", "content": "Describe your current role."}],
+)
+print(result.choices[0].message.content)
+```
+
+For a Reachy camera frame, encode the JPEG as a data URL and send a multimodal
+message with both `text` and `image_url` content, following
+`app/services/scene_reasoning.py`.
+
+Important sharing rules:
+
+- Multiple clients can safely share one running vLLM server. Requests are queued/batched, although load increases latency.
+- Multiple processes can read the same checkpoint without corrupting it, but a second 20+ GB Nemotron server on the same GB10 can exhaust unified memory. Share one server.
+- Do not move, rename, or delete `models/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` while this repo points to it. Reading it from Reachy is harmless.
+- A second server needs a different port and carefully reduced memory allocation. Sequential use is safer when different serving settings are required.
+- Use `127.0.0.1` on this computer. A remote robot requires authentication, firewall rules, and a secured network address; never expose an unauthenticated vLLM endpoint publicly.
+
+If both repos should be independent of either project directory, move the
+checkpoint once to a stable shared model directory and update
+`VISION_MODEL_SOURCE` in both projects. For now, leave the weights in place
+and share the server on port `8002` to avoid disrupting this platform.
 
 ## Detector modes
 

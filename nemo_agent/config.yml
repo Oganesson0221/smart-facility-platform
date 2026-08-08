@@ -15,7 +15,7 @@ llms:
     _type: openai
     api_key: ${LLM_API_KEY:-EMPTY}
     base_url: ${LLM_BASE_URL:-http://127.0.0.1:8001/v1}
-    model_name: ${LLM_MODEL:-google/gemma-4-12B-it}
+    model_name: ${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
     temperature: 0.1
 
 workflow:
@@ -29,7 +29,15 @@ workflow:
     - facility_fire_exit_validator
   verbose: false
   handle_tool_errors: true
-  max_iterations: 4
+  # Scene analysis can require detection followed by multimodal inspection;
+  # leave enough room for tool results and one retry while retaining a hard cap.
+  max_iterations: 8
+  # These tools already return validated JSON. Bypass a second LLM pass so the
+  # FastAPI client receives machine-readable payloads instead of paraphrased text.
+  return_direct:
+    - facility_object_detector
+    - facility_segmenter
+    - facility_scene_assessor
 
 general:
   front_end:

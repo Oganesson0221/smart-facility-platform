@@ -45,6 +45,11 @@ api_key="${VISION_API_KEY:-${LLM_API_KEY:-}}"
 mm_limit_per_prompt="${VISION_MM_LIMIT_PER_PROMPT:-{\"image\":1}}"
 max_model_len="${VISION_MAX_MODEL_LEN:-8192}"
 gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.45}"
+max_num_seqs="${VISION_MAX_NUM_SEQS:-8}"
+max_num_batched_tokens="${VISION_MAX_NUM_BATCHED_TOKENS:-32768}"
+reasoning_parser="${VISION_REASONING_PARSER:-nemotron_v3}"
+kv_cache_dtype="${VISION_KV_CACHE_DTYPE:-fp8}"
+moe_backend="${VISION_MOE_BACKEND:-}"
 
 args=(
   serve
@@ -73,7 +78,12 @@ if [[ -n "${gpu_memory_utilization}" ]]; then
 fi
 
 if [[ "${served_model_name,,}" == *"nemotron"* || "${model_source,,}" == *"nemotron"* ]]; then
-  args+=(--moe-backend triton)
+  [[ -n "${moe_backend}" ]] && args+=(--moe-backend "$moe_backend")
+  args+=(--enable-prefix-caching)
+  [[ -n "${max_num_seqs}" ]] && args+=(--max-num-seqs "$max_num_seqs")
+  [[ -n "${max_num_batched_tokens}" ]] && args+=(--max-num-batched-tokens "$max_num_batched_tokens")
+  [[ -n "${reasoning_parser}" ]] && args+=(--reasoning-parser "$reasoning_parser")
+  [[ -n "${kv_cache_dtype}" ]] && args+=(--kv-cache-dtype "$kv_cache_dtype")
 fi
 
 export VLLM_USE_V2_MODEL_RUNNER="${VLLM_USE_V2_MODEL_RUNNER:-0}"
@@ -81,8 +91,8 @@ export VLLM_USE_PRECOMPILED="${VLLM_USE_PRECOMPILED:-1}"
 export VLLM_USE_STANDALONE_COMPILE="${VLLM_USE_STANDALONE_COMPILE:-0}"
 export VLLM_ENABLE_INDUCTOR_MAX_AUTOTUNE="${VLLM_ENABLE_INDUCTOR_MAX_AUTOTUNE:-0}"
 export VLLM_HAS_FLASHINFER_CUBIN="${VLLM_HAS_FLASHINFER_CUBIN:-1}"
-export MAX_JOBS="${MAX_JOBS:-1}"
-export NVCC_THREADS="${NVCC_THREADS:-1}"
+export MAX_JOBS="${MAX_JOBS:-4}"
+export NVCC_THREADS="${NVCC_THREADS:-2}"
 unset VLLM_SERVER_IP
 echo "Starting vision vLLM on port ${port} with max_model_len=${max_model_len} and gpu_memory_utilization=${gpu_memory_utilization}."
 echo "Initial model load can take several minutes; the port will not answer until loading completes."

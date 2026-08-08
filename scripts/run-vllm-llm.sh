@@ -53,6 +53,12 @@ looks_like_gemma4() {
   [[ "$value" == *gemma-4* || "$value" == *gemma4* ]]
 }
 
+looks_like_qwen25() {
+  local value="${1:-}"
+  value="${value,,}"
+  [[ "$value" == *qwen2.5* || "$value" == *qwen-2.5* ]]
+}
+
 if [[ -z "${tool_call_parser}" ]] && {
   looks_like_gemma4 "$served_model_name" || looks_like_gemma4 "$model_source"
 }; then
@@ -63,6 +69,15 @@ if [[ -z "${reasoning_parser}" ]] && {
   looks_like_gemma4 "$served_model_name" || looks_like_gemma4 "$model_source"
 }; then
   reasoning_parser="gemma4"
+fi
+
+# Qwen 2.5 ships a Hermes-compatible tool-use chat template. NAT's
+# tool_calling_agent sends tool_choice=auto, so vLLM must have both automatic
+# tool selection and a parser enabled or every NAT request fails at runtime.
+if [[ -z "${tool_call_parser}" ]] && {
+  looks_like_qwen25 "$served_model_name" || looks_like_qwen25 "$model_source"
+}; then
+  tool_call_parser="hermes"
 fi
 
 if ! {

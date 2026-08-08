@@ -98,6 +98,30 @@ def _coerce_text_list(value: Any) -> list[str]:
     return [str(value).strip()]
 
 
+def _coerce_confidence(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        qualitative = {
+            "very high": 0.95,
+            "high": 0.9,
+            "medium": 0.6,
+            "moderate": 0.6,
+            "low": 0.3,
+            "very low": 0.1,
+        }
+        if normalized in qualitative:
+            return qualitative[normalized]
+        if normalized.endswith("%"):
+            try:
+                value = float(normalized[:-1]) / 100.0
+            except ValueError:
+                value = default
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return max(0.0, min(1.0, float(default)))
+
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -223,7 +247,12 @@ async def _call_vision_model(
             messages=multimodal_user_message(prompt, image_bytes),
             temperature=0,
             max_tokens=response_tokens,
-            extra_body={"keep_alive": settings.vision_keep_alive},
+            response_format={"type": "json_object"},
+            extra_body={
+                "chat_template_kwargs": {
+                    "enable_thinking": settings.vision_enable_thinking,
+                }
+            },
         )
         LOGGER.info(
             "Vision response model=%s elapsed_ms=%.2f",
@@ -330,7 +359,7 @@ def _parse_assessment(content: Any) -> dict[str, Any]:
     evidence = _coerce_text_list(result.get("evidence"))
     visible_objects = _coerce_text_list(result.get("visible_objects"))
     supporting_objects = _coerce_text_list(result.get("supporting_objects"))
-    confidence = max(0.0, min(1.0, float(result.get("confidence", 0))))
+    confidence = _coerce_confidence(result.get("confidence", 0))
     annotations = []
     annotation_source = result.get("annotations", [])
     if isinstance(annotation_source, dict):
@@ -375,7 +404,7 @@ def _parse_fire_exit_validation(content: Any) -> dict[str, Any]:
         "category": str(result.get("category", "fire_exit_obstruction")),
         "summary": str(result.get("summary", "No validation summary returned.")),
         "visible_evidence": [str(item) for item in visible_evidence[:8]],
-        "confidence": max(0.0, min(1.0, float(result.get("confidence", 0)))),
+        "confidence": _coerce_confidence(result.get("confidence", 0)),
         "vehicle_identifier": vehicle_identifier,
         "vehicle_identifier_type": (
             vehicle_identifier_type
@@ -384,7 +413,7 @@ def _parse_fire_exit_validation(content: Any) -> dict[str, Any]:
             else "none"
         ),
         "vehicle_identifier_confidence": (
-            max(0.0, min(1.0, float(vehicle_identifier_confidence)))
+            _coerce_confidence(vehicle_identifier_confidence)
             if vehicle_identifier_confidence not in (None, "")
             else None
         ),

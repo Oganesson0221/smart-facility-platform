@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     llm_enabled: bool = False
     llm_base_url: str = "http://127.0.0.1:8001/v1"
-    llm_model: str = "google/gemma-4-12B-it"
+    llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
     llm_api_key: str = ""
     llm_timeout_seconds: float = 45.0
 
@@ -77,11 +77,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("VISION_API_KEY", "LLM_API_KEY"),
     )
     vision_keep_alive: str = "30m"
+    vision_enable_thinking: bool = False
     vision_timeout_seconds: float = 180.0
     vision_validation_timeout_seconds: float = 60.0
     vision_validation_image_max_dim: int = 768
     vision_validation_jpeg_quality: int = 80
-    vision_validation_max_response_tokens: int = 120
+    vision_validation_max_response_tokens: int = 300
     validate_fire_exit_incidents_with_vision: bool = True
     vision_validation_fail_closed: bool = False
 
