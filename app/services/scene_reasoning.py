@@ -1,42 +1,34 @@
-import base64
 import json
+import logging
 import re
+from time import perf_counter
 from typing import Any
 
+import cv2
 import httpx
+import numpy as np
 
 from app.config import settings
 from app.services.cv.types import Detection
+from app.services.nemo_agent_client import orchestrate_fire_exit_validation
+from app.services.nemo_agent_client import orchestrate_scene_assessment
+from app.services.openai_compat import chat_completions
+from app.services.openai_compat import coerce_text_content
+from app.services.openai_compat import extract_chat_message_content
+from app.services.openai_compat import list_models
+from app.services.openai_compat import multimodal_user_message
 
 
-SCENE_PROMPT = """Inspect this facility image using only visible evidence.
-The image is accompanied by grounded YOLO detections. Use those detections as
-the only source for object labels and object boxes. Do not invent new object
-labels or bounding boxes. You may mention signs or doors in the evidence and
-summary, but only the detected YOLO objects may appear in supporting_objects.
+LOGGER = logging.getLogger(__name__)
+_VEHICLE_IDENTIFIER_LABELS = {"vehicle", "car", "truck", "bus", "van"}
 
-Return one JSON object with exactly these fields:
-- violation: boolean
-- category: short string
-- summary: one clear sentence
-- evidence: array of short visible observations
-- confidence: number from 0 to 1
-- visible_objects: array of important object names
-- supporting_objects: array of detected object labels that directly support the
-  decision. Use only labels present in the provided YOLO detections.
-"""
 
-FIRE_EXIT_VALIDATION_PROMPT = """Inspect this cropped facility image using only visible evidence.
-Decide whether the visible object is obstructing an emergency exit or a required
-fire-exit clearance zone. Do not assume obstruction unless the image supports it.
-
-Return one JSON object with exactly these fields:
-- confirmed: boolean
-- category: short string
-- summary: one clear sentence
-- visible_evidence: array of short visible observations
-- confidence: number from 0 to 1
-"""
+SCENE_PROMPT = (
+    "Inspect this facility image using only visible evidence and the supplied YOLO detections. "
+    "Use YOLO labels and boxes as the only allowed detected object references. "
+    "Return JSON only with keys: violation, category, summary, evidence, confidence, "
+    "visible_objects, supporting_objects. Keep summary short and evidence to at most 3 items."
+)
 
 
 _THINKING_PREFIX = re.compile(r"^\s*(?:<think>.*?</think>\s*)+", re.DOTALL)
@@ -150,39 +142,19 @@ def _serialize_scene_detections(
 
 
 def _extract_chat_content(payload: dict[str, Any]) -> Any:
-    message = payload.get("message")
-    if isinstance(message, dict):
-        for key in ("content", "text"):
-            value = message.get(key)
-            if value not in (None, ""):
-                return value
-    for key in ("response", "content"):
-        value = payload.get(key)
-        if value not in (None, ""):
-            return value
-    raise KeyError("Vision response did not include assistant content")
+    return extract_chat_message_content(payload)
 
 
 async def _available_vision_models(client: httpx.AsyncClient) -> list[str]:
+    del client
     try:
-        response = await client.get(f"{settings.vision_base_url.rstrip('/')}/api/tags")
-        response.raise_for_status()
-        payload = response.json()
+        return await list_models(
+            base_url=settings.vision_base_url,
+            api_key=settings.vision_api_key,
+            timeout_seconds=min(5.0, settings.vision_timeout_seconds),
+        )
     except (httpx.HTTPError, ValueError, json.JSONDecodeError):
         return []
-
-    models = payload.get("models", [])
-    if not isinstance(models, list):
-        return []
-
-    names: list[str] = []
-    for item in models:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name") or item.get("model")
-        if name:
-            names.append(str(name))
-    return names
 
 
 async def vision_runtime_status() -> dict[str, Any]:
@@ -191,10 +163,11 @@ async def vision_runtime_status() -> dict[str, Any]:
 
     timeout = min(5.0, settings.vision_timeout_seconds)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(f"{settings.vision_base_url.rstrip('/')}/api/tags")
-            response.raise_for_status()
-            models = await _available_vision_models(client)
+        models = await list_models(
+            base_url=settings.vision_base_url,
+            api_key=settings.vision_api_key,
+            timeout_seconds=timeout,
+        )
     except httpx.HTTPError as exc:
         return {
             "enabled": True,
@@ -217,59 +190,139 @@ async def vision_runtime_status() -> dict[str, Any]:
     }
 
 
-async def _call_vision_model(prompt: str, image_bytes: bytes) -> Any:
-    payload = {
-        "model": settings.vision_model,
-        "stream": False,
-        "format": "json",
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-                "images": [base64.b64encode(image_bytes).decode("ascii")],
-            }
-        ],
-        "options": {"temperature": 0},
-    }
-
-    async with httpx.AsyncClient(timeout=settings.vision_timeout_seconds) as client:
+async def _call_vision_model(
+    prompt: str,
+    image_bytes: bytes,
+    *,
+    timeout_seconds: float | None = None,
+    max_response_tokens: int | None = None,
+) -> Any:
+    started = perf_counter()
+    response_tokens = max(
+        48,
+        int(
+            max_response_tokens
+            if max_response_tokens is not None
+            else settings.vision_validation_max_response_tokens
+        ),
+    )
+    timeout = timeout_seconds if timeout_seconds is not None else settings.vision_timeout_seconds
+    try:
+        LOGGER.info(
+            "Vision request model=%s prompt_chars=%d image_bytes=%d response_tokens=%d",
+            settings.vision_model,
+            len(prompt),
+            len(image_bytes),
+            response_tokens,
+        )
+        payload = await chat_completions(
+            base_url=settings.vision_base_url,
+            api_key=settings.vision_api_key,
+            timeout_seconds=timeout,
+            model=settings.vision_model,
+            messages=multimodal_user_message(prompt, image_bytes),
+            temperature=0,
+            max_tokens=response_tokens,
+            extra_body={"keep_alive": settings.vision_keep_alive},
+        )
+        LOGGER.info(
+            "Vision response model=%s elapsed_ms=%.2f",
+            settings.vision_model,
+            (perf_counter() - started) * 1000,
+        )
+        return _extract_chat_content(payload)
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text.strip()
+        detail = body
         try:
-            response = await client.post(
-                f"{settings.vision_base_url.rstrip('/')}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            return _extract_chat_content(response.json())
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text.strip()
-            detail = body
-            try:
-                error_payload = exc.response.json()
-                if isinstance(error_payload, dict) and error_payload.get("error"):
-                    detail = str(error_payload["error"])
-            except (ValueError, json.JSONDecodeError):
-                pass
+            error_payload = exc.response.json()
+            if isinstance(error_payload, dict) and error_payload.get("error"):
+                detail = str(error_payload["error"])
+        except (ValueError, json.JSONDecodeError):
+            pass
 
-            if exc.response.status_code == 404 and settings.vision_model in detail:
-                available_models = await _available_vision_models(client)
-                available_suffix = (
-                    f" Available models: {', '.join(available_models)}."
-                    if available_models
-                    else ""
-                )
-                raise RuntimeError(
-                    f"Configured vision model '{settings.vision_model}' is not installed on "
-                    f"the local Ollama endpoint at '{settings.vision_base_url}'."
-                    f"{available_suffix}"
-                ) from exc
+        if exc.response.status_code in {400, 404} and settings.vision_model in detail:
+            available_models = await list_models(
+                base_url=settings.vision_base_url,
+                api_key=settings.vision_api_key,
+                timeout_seconds=min(5.0, timeout),
+            )
+            available_suffix = (
+                f" Available models: {', '.join(available_models)}."
+                if available_models
+                else ""
+            )
             raise RuntimeError(
-                f"Local vision endpoint '{settings.vision_base_url}' returned HTTP "
-                f"{exc.response.status_code}: {detail[:220]}"
+                f"Configured vision model '{settings.vision_model}' is not available on "
+                f"the local OpenAI-compatible endpoint at '{settings.vision_base_url}'."
+                f"{available_suffix}"
             ) from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"Local vision endpoint '{settings.vision_base_url}' is unreachable"
-            ) from exc
+        raise RuntimeError(
+            f"Local vision endpoint '{settings.vision_base_url}' returned HTTP "
+            f"{exc.response.status_code}: {detail[:220]}"
+        ) from exc
+    except httpx.TimeoutException as exc:
+        LOGGER.warning(
+            "Vision request timed out model=%s elapsed_ms=%.2f timeout_seconds=%.2f",
+            settings.vision_model,
+            (perf_counter() - started) * 1000,
+            float(timeout),
+        )
+        raise RuntimeError(
+            f"Local vision model '{settings.vision_model}' timed out after "
+            f"{float(timeout):.1f} seconds"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"Local vision endpoint '{settings.vision_base_url}' is unreachable"
+        ) from exc
+
+
+def _build_fire_exit_validation_prompt(object_label: str | None = None) -> str:
+    label = str(object_label or "unknown object").strip() or "unknown object"
+    include_vehicle_identifier = label.lower() in _VEHICLE_IDENTIFIER_LABELS
+    base = (
+        "Inspect this cropped facility candidate image. "
+        f"Primary YOLO object: {label}. "
+        "Decide only whether that visible object is blocking an emergency exit path or required fire-exit clearance area in the crop. "
+        "Use only visible evidence. If uncertain, set confirmed to false. "
+        "Return JSON only. Keep summary short and visible_evidence to at most 3 items."
+    )
+    if include_vehicle_identifier:
+        return (
+            f"{base} Use keys: confirmed, category, summary, visible_evidence, confidence, "
+            "vehicle_identifier, vehicle_identifier_type, vehicle_identifier_confidence. "
+            "Return an empty vehicle_identifier with type none when nothing legible is visible."
+        )
+    return (
+        f"{base} Use keys: confirmed, category, summary, visible_evidence, confidence."
+    )
+
+
+def _prepare_vision_image_bytes(image_bytes: bytes) -> bytes:
+    try:
+        buffer = np.frombuffer(image_bytes, dtype=np.uint8)
+        image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    except cv2.error:
+        return image_bytes
+    if image is None or image.size == 0:
+        return image_bytes
+    height, width = image.shape[:2]
+    max_dim = max(1, int(settings.vision_validation_image_max_dim))
+    longest = max(height, width)
+    if longest > max_dim:
+        scale = max_dim / float(longest)
+        image = cv2.resize(
+            image,
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    params = [
+        int(cv2.IMWRITE_JPEG_QUALITY),
+        int(max(30, min(100, settings.vision_validation_jpeg_quality))),
+    ]
+    ok, encoded = cv2.imencode(".jpg", image, params)
+    return encoded.tobytes() if ok else image_bytes
 
 
 def _parse_assessment(content: Any) -> dict[str, Any]:
@@ -314,18 +367,33 @@ def _parse_assessment(content: Any) -> dict[str, Any]:
 def _parse_fire_exit_validation(content: Any) -> dict[str, Any]:
     result = _coerce_json_object(content)
     visible_evidence = _coerce_text_list(result.get("visible_evidence"))
+    vehicle_identifier = str(result.get("vehicle_identifier") or "").strip()
+    vehicle_identifier_type = str(result.get("vehicle_identifier_type") or "").strip()
+    vehicle_identifier_confidence = result.get("vehicle_identifier_confidence")
     return {
         "confirmed": _coerce_bool(result.get("confirmed", False)),
         "category": str(result.get("category", "fire_exit_obstruction")),
         "summary": str(result.get("summary", "No validation summary returned.")),
         "visible_evidence": [str(item) for item in visible_evidence[:8]],
         "confidence": max(0.0, min(1.0, float(result.get("confidence", 0)))),
+        "vehicle_identifier": vehicle_identifier,
+        "vehicle_identifier_type": (
+            vehicle_identifier_type
+            or "unspecified"
+            if vehicle_identifier
+            else "none"
+        ),
+        "vehicle_identifier_confidence": (
+            max(0.0, min(1.0, float(vehicle_identifier_confidence)))
+            if vehicle_identifier_confidence not in (None, "")
+            else None
+        ),
         "model": settings.vision_model,
         "local": True,
     }
 
 
-async def assess_scene(
+async def assess_scene_direct(
     image_bytes: bytes,
     detections: list[Detection] | None = None,
     image_shape: tuple[int, int] | None = None,
@@ -338,23 +406,14 @@ async def assess_scene(
         "YOLO detections (JSON):\n"
         f"{json.dumps(_serialize_scene_detections(detections, image_shape))}"
     )
+    image_bytes = _prepare_vision_image_bytes(image_bytes)
     try:
-        return _parse_assessment(await _call_vision_model(prompt, image_bytes))
-    except RuntimeError:
-        raise
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"Local vision model '{settings.vision_model}' returned an invalid response"
-        ) from exc
-
-
-async def validate_fire_exit_obstruction(image_bytes: bytes) -> dict[str, Any]:
-    if not settings.vision_enabled:
-        raise RuntimeError("Automatic scene reasoning is disabled")
-
-    try:
-        return _parse_fire_exit_validation(
-            await _call_vision_model(FIRE_EXIT_VALIDATION_PROMPT, image_bytes)
+        return _parse_assessment(
+            await _call_vision_model(
+                prompt,
+                image_bytes,
+                timeout_seconds=settings.vision_timeout_seconds,
+            )
         )
     except RuntimeError:
         raise
@@ -362,3 +421,60 @@ async def validate_fire_exit_obstruction(image_bytes: bytes) -> dict[str, Any]:
         raise RuntimeError(
             f"Local vision model '{settings.vision_model}' returned an invalid response"
         ) from exc
+
+
+async def validate_fire_exit_obstruction_direct(
+    image_bytes: bytes,
+    object_label: str | None = None,
+) -> dict[str, Any]:
+    if not settings.vision_enabled:
+        raise RuntimeError("Automatic scene reasoning is disabled")
+
+    prompt = _build_fire_exit_validation_prompt(object_label)
+    image_bytes = _prepare_vision_image_bytes(image_bytes)
+    try:
+        return _parse_fire_exit_validation(
+            await _call_vision_model(
+                prompt,
+                image_bytes,
+                timeout_seconds=settings.vision_validation_timeout_seconds,
+                max_response_tokens=settings.vision_validation_max_response_tokens,
+            )
+        )
+    except RuntimeError:
+        raise
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Local vision model '{settings.vision_model}' returned an invalid response"
+        ) from exc
+
+
+async def assess_scene(
+    image_bytes: bytes,
+    detections: list[Detection] | None = None,
+    image_shape: tuple[int, int] | None = None,
+) -> dict[str, Any]:
+    if settings.nemo_agent_enabled and settings.nemo_agent_orchestrate_vision:
+        try:
+            return await orchestrate_scene_assessment(image_bytes, detections, image_shape)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.warning(
+                "NeMo scene workflow unavailable; falling back to direct vision path: %s",
+                exc,
+            )
+    return await assess_scene_direct(image_bytes, detections, image_shape)
+
+
+async def validate_fire_exit_obstruction(
+    image_bytes: bytes,
+    object_label: str | None = None,
+) -> dict[str, Any]:
+    if settings.nemo_agent_enabled and settings.nemo_agent_orchestrate_vision:
+        try:
+            return await orchestrate_fire_exit_validation(image_bytes, object_label)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.warning(
+                "NeMo fire-exit validation unavailable; falling back to direct vision path: %s",
+                exc,
+            )
+    return await validate_fire_exit_obstruction_direct(image_bytes, object_label)

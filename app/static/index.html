@@ -48,28 +48,22 @@
         </div>
         <div class="header-actions">
           <div class="system-pill"><span class="status-dot"></span><span id="systemText">Checking system</span></div>
-          <button class="button primary compact" data-go="analyse">Run analysis <span>↗</span></button>
+          <button class="button primary compact" data-go="analyse">Run check <span>↗</span></button>
         </div>
       </header>
 
       <section class="runtime-strip" aria-label="Runtime status">
-        <div class="runtime-label">
-          <span class="runtime-kicker">SYSTEM</span>
-          <strong>Local safety pipeline</strong>
-        </div>
         <div class="runtime-node" id="visionRuntime">
           <span class="runtime-dot"></span>
-          <div><small>VISION</small><strong id="visionRuntimeText">Checking model</strong></div>
+          <div><small>VISION</small><strong id="visionRuntimeText">Checking model</strong><em id="visionRuntimeHint">Waiting for health data</em></div>
         </div>
-        <span class="runtime-arrow">→</span>
         <div class="runtime-node" id="agentRuntime">
           <span class="runtime-dot"></span>
-          <div><small>AGENT</small><strong id="agentRuntimeText">Checking NeMo</strong></div>
+          <div><small>AGENT</small><strong id="agentRuntimeText">Checking NeMo</strong><em id="agentRuntimeHint">Waiting for health data</em></div>
         </div>
-        <span class="runtime-arrow">→</span>
         <div class="runtime-node" id="telegramRuntime">
           <span class="runtime-dot"></span>
-          <div><small>ALERTING</small><strong id="telegramRuntimeText">Checking Telegram</strong></div>
+          <div><small>ALERTING</small><strong id="telegramRuntimeText">Checking Telegram</strong><em id="telegramRuntimeHint">Waiting for health data</em></div>
         </div>
       </section>
 
@@ -78,15 +72,15 @@
           <div>
             <p class="eyebrow mint">Smart Facility Platform</p>
             <h2>See risk. Act before<br>it escalates.</h2>
-            <p>Local multimodal intelligence detects fire-exit clearance obstructions, grounds decisions in your operating procedures, and coordinates a traceable response.</p>
+            <p>Local YOLO, SAM, multimodal reasoning, and NeMo orchestration keep fire-exit decisions traceable on this host.</p>
             <div class="hero-actions">
               <button class="button bright" data-go="analyse">Start visual analysis</button>
               <button class="button ghost" id="refreshOverview">Refresh operations</button>
             </div>
             <div class="hero-trust">
-              <span>● Local inference</span>
-              <span>● NeMo orchestrated</span>
-              <span>● Human controlled</span>
+              <span>● Local models</span>
+              <span>● NeMo tools</span>
+              <span>● Stored evidence</span>
             </div>
           </div>
           <div class="hero-visual">
@@ -156,7 +150,7 @@
                 <strong>Drop an image or video</strong>
                 <small>or load the synthetic demo to test now</small>
               </div>
-              <div class="draw-hint" id="drawHint">Draw the fire-exit clearance zone that must remain clear</div>
+              <div class="draw-hint" id="drawHint">Draw a fire-exit clearance zone to restrict analysis, or leave blank to use the full frame</div>
             </div>
             <div class="stage-tools">
               <label class="button ghost file-button">Select media<input id="mediaInput" type="file" accept="image/*"></label>
@@ -167,10 +161,10 @@
 
           <aside class="panel control-panel">
             <div class="panel-head"><div><p class="eyebrow">Analysis policy</p><h3>Inspection setup</h3></div></div>
-            <div class="workflow-steps" aria-label="Analysis workflow">
-              <span><b>1</b> Inspect</span><i></i>
-              <span><b>2</b> Annotate</span><i></i>
-              <span><b>3</b> Escalate</span>
+            <div class="setup-highlights" aria-label="Analysis workflow">
+              <span class="setup-chip">YOLO first</span>
+              <span class="setup-chip">SAM refine</span>
+              <span class="setup-chip">NeMo respond</span>
             </div>
             <label class="field"><span>Camera</span><select id="cameraSelect"></select></label>
             <div class="field-row">
@@ -178,11 +172,11 @@
               <label class="field"><span>Persistence</span><input id="durationInput" type="number" min="0" step="1" value="5"><i>seconds</i></label>
             </div>
             <label class="field"><span>Obstruction classes</span><textarea id="classesInput" rows="3">car, truck, bus, motorcycle, bicycle</textarea></label>
-            <div class="zone-status ready" id="zoneStatus"><span>✦</span><div><strong>Automatic scene reasoning</strong><small>No polygon needed for images</small></div></div>
+            <div class="zone-status ready" id="zoneStatus"><span>✦</span><div><strong>YOLO + SAM full-frame analysis</strong><small>No polygon needed for images unless you want to restrict the zone</small></div></div>
             <button class="button bright full" id="analyseButton" disabled>
               <span id="analyseLabel">Analyse image</span><span>→</span>
             </button>
-            <p class="privacy-copy">Media and model inference stay on this machine. Configured recipients receive annotated incident alerts.</p>
+            <p class="privacy-copy">Media stays local. Alerts use annotated evidence from this host.</p>
           </aside>
         </div>
         <div id="analysisResult" class="result-area"></div>
@@ -200,7 +194,7 @@
         <div class="settings-intro">
           <p class="eyebrow mint">Runtime</p>
           <h2>Private intelligence.<br>Operational control.</h2>
-          <p>Vision inference, incident history, and SOP retrieval stay on this facility host. NVIDIA NeMo coordinates the response workflow; external alerting remains explicit and observable.</p>
+          <p>Inference, evidence, and SOP retrieval stay local. NeMo coordinates the workflow when its runtime is online.</p>
         </div>
         <div class="settings-grid">
           <article class="setting-card">

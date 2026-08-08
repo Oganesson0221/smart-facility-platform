@@ -1,3 +1,5 @@
+# Optional GPU detector dependencies. For SAM 2 extras, also install
+# requirements-sam.txt and the official SAM 2 package described in README.md.
 -r requirements.txt
 torch>=2.3.0
 transformers>=4.42.0

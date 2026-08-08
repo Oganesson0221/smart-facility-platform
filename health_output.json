@@ -1,0 +1,48 @@
+{
+  "status": "ok",
+  "detector": "yolo",
+  "detector_status": "ready",
+  "llm": {
+    "enabled": true,
+    "model": "qwen3:32b",
+    "base_url": "http://127.0.0.1:11434/v1"
+  },
+  "nemo_agent": {
+    "enabled": true,
+    "required": true,
+    "model": "smart-facility-agent",
+    "base_url": "http://127.0.0.1:8010/v1",
+    "reachable": false,
+    "detail": ""
+  },
+  "vision": {
+    "enabled": true,
+    "model": "gemma3:27b",
+    "base_url": "http://127.0.0.1:11434",
+    "reachable": true,
+    "model_available": true,
+    "available_models": [
+      "qwen3:32b",
+      "gemma3:27b"
+    ],
+    "detail": "ready"
+  },
+  "sam": {
+    "enabled": true,
+    "provider": "sam2",
+    "model_size": "tiny",
+    "checkpoint_configured": true,
+    "checkpoint_exists": true,
+    "checkpoint_path": "/home/admin/Documents/smar-facility-platform/third_party/sam2/checkpoints/sam2.1_hiera_tiny.pt",
+    "device": "auto",
+    "fail_open": true,
+    "importable": true,
+    "ready": true,
+    "detail": "ready"
+  },
+  "telegram_configured": true,
+  "telegram_subscribers": 1,
+  "telegram_recipients": 1,
+  "telegram_delivery": "sent",
+  "time": "2026-07-31T03:49:16.347926+00:00"
+}

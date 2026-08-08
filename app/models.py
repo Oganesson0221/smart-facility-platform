@@ -61,6 +61,74 @@ class Incident(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
+    @property
+    def spatial_method(self) -> str | None:
+        return (self.incident_metadata or {}).get("spatial_method")
+
+    @property
+    def object_intrusion_ratio(self) -> float | None:
+        value = (self.incident_metadata or {}).get("object_intrusion_ratio")
+        return float(value) if value is not None else None
+
+    @property
+    def exit_blockage_ratio(self) -> float | None:
+        value = (self.incident_metadata or {}).get("exit_blockage_ratio")
+        return float(value) if value is not None else None
+
+    @property
+    def mask_zone_iou(self) -> float | None:
+        value = (self.incident_metadata or {}).get("mask_zone_iou")
+        return float(value) if value is not None else None
+
+    @property
+    def sam_polygon(self) -> list | None:
+        return (self.incident_metadata or {}).get("sam_polygon")
+
+    @property
+    def sam_model(self) -> str | None:
+        return (self.incident_metadata or {}).get("sam_model")
+
+    @property
+    def sam_score(self) -> float | None:
+        value = (self.incident_metadata or {}).get("sam_score")
+        return float(value) if value is not None else None
+
+    @property
+    def sam_inference_ms(self) -> float | None:
+        value = (self.incident_metadata or {}).get("sam_inference_ms")
+        return float(value) if value is not None else None
+
+    @property
+    def vehicle_identifier(self) -> str | None:
+        value = (self.incident_metadata or {}).get("vehicle_identifier")
+        text = str(value).strip() if value is not None else ""
+        return text or None
+
+    @property
+    def vehicle_identifier_type(self) -> str | None:
+        value = (self.incident_metadata or {}).get("vehicle_identifier_type")
+        text = str(value).strip() if value is not None else ""
+        return text or None
+
+    @property
+    def vehicle_identifier_confidence(self) -> float | None:
+        value = (self.incident_metadata or {}).get("vehicle_identifier_confidence")
+        return float(value) if value is not None else None
+
+    @property
+    def segmentation(self) -> dict | None:
+        metadata = self.incident_metadata or {}
+        if not metadata.get("sam_polygon"):
+            return None
+        return {
+            "sam_polygon": metadata.get("sam_polygon"),
+            "sam_model": metadata.get("sam_model"),
+            "sam_score": metadata.get("sam_score"),
+            "sam_inference_ms": metadata.get("sam_inference_ms"),
+            "mask_area_pixels": metadata.get("mask_area_pixels"),
+            "spatial_method": metadata.get("spatial_method"),
+        }
+
 
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"

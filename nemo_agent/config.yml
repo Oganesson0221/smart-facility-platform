@@ -1,14 +1,21 @@
 functions:
   facility_sop:
     _type: smart_facility_sop
-    sop_directory: ${SOP_DIRECTORY:-./sops}
+  facility_object_detector:
+    _type: smart_facility_object_detector
+  facility_segmenter:
+    _type: smart_facility_segmenter
+  facility_scene_assessor:
+    _type: smart_facility_scene_assessor
+  facility_fire_exit_validator:
+    _type: smart_facility_fire_exit_validator
 
 llms:
   local_facility_llm:
     _type: openai
     api_key: ${LLM_API_KEY:-EMPTY}
     base_url: ${LLM_BASE_URL:-http://127.0.0.1:8001/v1}
-    model_name: ${LLM_MODEL:-nvidia/NVIDIA-Nemotron-Nano-9B-v2}
+    model_name: ${LLM_MODEL:-google/gemma-4-12B-it}
     temperature: 0.1
 
 workflow:
@@ -16,6 +23,10 @@ workflow:
   llm_name: local_facility_llm
   tool_names:
     - facility_sop
+    - facility_object_detector
+    - facility_segmenter
+    - facility_scene_assessor
+    - facility_fire_exit_validator
   verbose: false
   handle_tool_errors: true
   max_iterations: 4

@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     yolo_confidence_threshold: float = 0.35
     yolo_image_size: int = 640
     yolo_device: str = "auto"
+    sam_enabled: bool = False
+    sam_provider: str = "sam2"
+    sam_model_size: str = "tiny"
+    sam_checkpoint_path: str = ""
+    sam_device: str = "auto"
+    sam_use_fp16: bool = True
+    sam_min_yolo_confidence: float = 0.35
+    sam_only_for_zone_candidates: bool = True
+    sam_boundary_margin_pixels: int = 20
+    sam_mask_simplification_epsilon: float = 2.0
+    sam_prompt_box_expand_ratio: float = 0.03
+    sam_fail_open: bool = True
     grounding_dino_model: str = "IDEA-Research/grounding-dino-tiny"
     detection_prompt: str = (
         "vehicle . car . truck . motorcycle . chair . trolley . pallet . "
@@ -44,7 +56,7 @@ class Settings(BaseSettings):
 
     llm_enabled: bool = False
     llm_base_url: str = "http://127.0.0.1:8001/v1"
-    llm_model: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
+    llm_model: str = "google/gemma-4-12B-it"
     llm_api_key: str = ""
     llm_timeout_seconds: float = 45.0
 
@@ -54,11 +66,22 @@ class Settings(BaseSettings):
     nemo_agent_api_key: str = ""
     nemo_agent_timeout_seconds: float = 60.0
     nemo_agent_required: bool = False
+    nemo_agent_orchestrate_cv: bool = True
+    nemo_agent_orchestrate_vision: bool = True
 
     vision_enabled: bool = True
-    vision_base_url: str = "http://127.0.0.1:11434"
-    vision_model: str = "gemma3:27b"
+    vision_base_url: str = "http://127.0.0.1:8002/v1"
+    vision_model: str = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+    vision_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("VISION_API_KEY", "LLM_API_KEY"),
+    )
+    vision_keep_alive: str = "30m"
     vision_timeout_seconds: float = 180.0
+    vision_validation_timeout_seconds: float = 60.0
+    vision_validation_image_max_dim: int = 768
+    vision_validation_jpeg_quality: int = 80
+    vision_validation_max_response_tokens: int = 120
     validate_fire_exit_incidents_with_vision: bool = True
     vision_validation_fail_closed: bool = False
 

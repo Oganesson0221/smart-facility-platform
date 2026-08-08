@@ -1,11 +1,15 @@
 import asyncio
+from contextlib import nullcontext
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import cv2
+import httpx
 import numpy as np
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -14,27 +18,46 @@ from app.database import Base
 from app.models import AnalysisJob, Camera, Incident
 from app.services.cv.annotator import annotate, annotate_scene
 from app.services.cv.detector import convert_yolo_results, suppress_duplicate_detections
+from app.services.cv.segmenter import (
+    Sam2Segmenter,
+    box_centroid_point,
+    clamp_box_to_image,
+    reset_segmenter_cache,
+)
 from app.services.cv.roi_engine import (
+    box_intersects_or_near_polygon,
+    calculate_box_zone_iou,
     calculate_exit_blockage_ratio,
+    calculate_mask_spatial_metrics,
     calculate_object_intrusion_ratio,
     evaluate_detection,
     validate_polygon,
 )
 from app.services.cv.tracker import IoUTracker
-from app.services.cv.types import Detection, Obstruction
+from app.services.cv.types import Detection, Obstruction, SegmentationResult
+from app.services.llm import llm_runtime_status
 from app.services.llm import _parse_result
+from app.services.llm import create_grounded_summary
 from app.services.processing import (
+    _crop_validation_region,
+    _evaluate_obstructions,
+    _prepare_validation_image,
+    analyse_image,
     classify_scene_assessment,
     ground_scene_assessment,
     parse_scene_detections_payload,
+    preview_image_analysis,
     process_video_job,
     serialize_scene_detections,
     synthetic_demo_frame,
 )
 from app.services.scene_reasoning import (
+    _build_fire_exit_validation_prompt,
     _extract_chat_content,
     _parse_assessment,
     _parse_fire_exit_validation,
+    _prepare_vision_image_bytes,
+    validate_fire_exit_obstruction,
 )
 from app.services.sop import search_sops
 
@@ -94,6 +117,21 @@ class FakeDetector:
         return [Detection(item.label, item.confidence, item.box) for item in self.detections_per_frame[idx]]
 
 
+class FakeSegmenter:
+    name = "sam2"
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def segment(self, image, box):
+        self.calls.append((image.shape, box))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
 class RoiTests(unittest.TestCase):
     def test_yolo_result_conversion_to_detection_type(self):
         detections = convert_yolo_results(
@@ -130,6 +168,7 @@ class RoiTests(unittest.TestCase):
         self.assertAlmostEqual(calculate_exit_blockage_ratio(partial.box, polygon), 0.25)
         self.assertAlmostEqual(calculate_object_intrusion_ratio(inside.box, polygon), 1.0)
         self.assertAlmostEqual(calculate_exit_blockage_ratio(inside.box, polygon), 0.64)
+        self.assertAlmostEqual(calculate_box_zone_iou(inside.box, polygon), 0.64)
 
     def test_class_filtering_and_thresholds(self):
         polygon = validate_polygon([[0, 0], [100, 0], [100, 100], [0, 100]])
@@ -150,9 +189,142 @@ class RoiTests(unittest.TestCase):
         )
         self.assertFalse(result.is_blocking)
 
+    def test_full_frame_mode_can_treat_any_detected_class_as_obstruction_candidate(self):
+        polygon = validate_polygon([[0, 0], [100, 0], [100, 100], [0, 100]])
+        result = evaluate_detection(
+            Detection("chair", 0.9, (20, 20, 80, 80)),
+            polygon,
+            {"car", "truck"},
+            0.25,
+            0.05,
+            allow_all_classes=True,
+        )
+        self.assertTrue(result.is_blocking)
+
     def test_invalid_polygon_rejected(self):
         with self.assertRaises(ValueError):
             validate_polygon([[0, 0], [1, 1]])
+
+    def test_mask_spatial_metrics(self):
+        mask = np.zeros((100, 100), dtype=bool)
+        mask[25:75, 25:75] = True
+        metrics = calculate_mask_spatial_metrics(
+            mask,
+            [[0, 0], [49, 0], [49, 99], [0, 99]],
+        )
+        self.assertAlmostEqual(metrics["object_intrusion_ratio"], 0.5, places=2)
+        self.assertAlmostEqual(metrics["exit_blockage_ratio"], 0.25, places=2)
+        self.assertAlmostEqual(metrics["mask_zone_iou"], 0.2, places=2)
+
+    def test_box_precheck_detects_near_zone_candidates(self):
+        polygon = validate_polygon([[0, 0], [100, 0], [100, 100], [0, 100]])
+        self.assertFalse(box_intersects_or_near_polygon((150, 150, 200, 200), polygon, 20))
+        self.assertTrue(box_intersects_or_near_polygon((102, 20, 140, 70), polygon, 5))
+
+    def test_full_frame_validation_crop_stays_near_detection(self):
+        image = np.zeros((200, 300, 3), dtype=np.uint8)
+        polygon = [[0, 0], [299, 0], [299, 199], [0, 199]]
+        crop = _crop_validation_region(image, polygon, (120, 70, 180, 140))
+        self.assertLess(crop.shape[0], image.shape[0])
+        self.assertLess(crop.shape[1], image.shape[1])
+        self.assertGreaterEqual(crop.shape[0], 70)
+        self.assertGreaterEqual(crop.shape[1], 60)
+
+    def test_validation_image_is_downscaled_before_gemma(self):
+        image = np.zeros((1800, 1200, 3), dtype=np.uint8)
+        with patch("app.services.processing.settings.vision_validation_image_max_dim", 512):
+            resized = _prepare_validation_image(image)
+        self.assertLessEqual(max(resized.shape[:2]), 512)
+
+
+class SegmenterTests(unittest.TestCase):
+    def tearDown(self):
+        reset_segmenter_cache()
+
+    def test_sam_box_prompt_is_clamped_and_expanded(self):
+        box = clamp_box_to_image((-10, 5, 120, 90), (100, 100, 3), expand_ratio=0.1)
+        self.assertEqual(box, (0, 0, 100, 98))
+
+    def test_box_centroid_prompt_uses_yolo_box_center(self):
+        self.assertEqual(box_centroid_point((10, 20, 50, 80)), (30, 50))
+
+    def test_sam_mask_cleanup_prefers_region_matching_prompt_box(self):
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        mask = np.zeros((80, 80), dtype=bool)
+        mask[5:18, 5:18] = True
+        mask[20:55, 22:58] = True
+        cleaned = segmenter._cleanup_mask(mask, (18, 18, 60, 60))
+        self.assertTrue(cleaned[30, 30])
+        self.assertFalse(cleaned[10, 10])
+
+    def test_sam_mask_cleanup_can_prefer_region_containing_prompt_point(self):
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        mask = np.zeros((80, 80), dtype=bool)
+        mask[5:18, 5:18] = True
+        mask[20:55, 22:58] = True
+        cleaned = segmenter._cleanup_mask(
+            mask,
+            (5, 5, 58, 58),
+            prompt_point=(10, 10),
+        )
+        self.assertTrue(cleaned[10, 10])
+        self.assertFalse(cleaned[30, 30])
+
+    def test_sam_mask_converts_to_polygon(self):
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        mask = np.zeros((60, 60), dtype=bool)
+        mask[10:40, 12:38] = True
+        polygon = segmenter._mask_to_polygon(mask, (10, 10, 40, 40), (60, 60))
+        self.assertGreaterEqual(len(polygon), 4)
+
+    def test_empty_mask_polygon_conversion_fails(self):
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        with self.assertRaises(RuntimeError):
+            segmenter._mask_to_polygon(np.zeros((20, 20), dtype=bool), (1, 1, 10, 10), (20, 20))
+
+    def test_segmenter_is_loaded_lazily(self):
+        from app.services.cv import segmenter as segmenter_module
+
+        with patch.object(segmenter_module.settings, "sam_enabled", True), patch.object(
+            segmenter_module.settings, "sam_provider", "sam2"
+        ), patch.object(segmenter_module, "Sam2Segmenter") as mock_segmenter:
+            reset_segmenter_cache()
+            instance = object()
+            mock_segmenter.return_value = instance
+            self.assertIs(segmenter_module.get_segmenter(), instance)
+            self.assertIs(segmenter_module.get_segmenter(), instance)
+            mock_segmenter.assert_called_once()
+
+    def test_segmenter_passes_positive_centroid_prompt_to_predictor(self):
+        class FakePredictor:
+            def __init__(self):
+                self.image_shape = None
+                self.kwargs = None
+
+            def set_image(self, image):
+                self.image_shape = image.shape
+
+            def predict(self, **kwargs):
+                self.kwargs = kwargs
+                mask = np.zeros((1, 60, 60), dtype=bool)
+                mask[0, 10:40, 12:38] = True
+                return mask, np.array([0.92], dtype=float), None
+
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        segmenter.torch = SimpleNamespace(inference_mode=lambda: nullcontext())
+        segmenter._autocast_context = lambda: nullcontext()
+        segmenter.predictor = FakePredictor()
+        segmenter.model_name = "sam2.1_hiera_tiny (cpu)"
+        image = np.zeros((60, 60, 3), dtype=np.uint8)
+
+        with patch("app.services.cv.segmenter.settings.sam_prompt_box_expand_ratio", 0.0):
+            result = segmenter.segment(image, (10, 10, 40, 40))
+
+        point_coords = np.asarray(segmenter.predictor.kwargs["point_coords"]).reshape(-1, 2)
+        point_labels = np.asarray(segmenter.predictor.kwargs["point_labels"]).reshape(-1)
+        self.assertEqual(tuple(int(value) for value in point_coords[0]), (25, 25))
+        self.assertEqual(point_labels.tolist(), [1])
+        self.assertEqual(result.prompt_point, (25, 25))
 
 
 class TrackerTests(unittest.TestCase):
@@ -342,6 +514,242 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             await process_video_job("job-1", Path("video.mp4"), self.camera.exit_zone)
         self.assertEqual(len(self._incidents()), 0)
 
+    def test_sam_disabled_keeps_yolo_box_path(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (10, 10, 90, 90))
+        with patch("app.services.processing.settings.sam_enabled", False):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(obstructions[0].spatial_method, "yolo_box_fallback")
+        self.assertIsNone(obstructions[0].segmentation)
+
+    def test_no_sam_call_for_detection_outside_zone(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (145, 145, 170, 170))
+        fake_segmenter = FakeSegmenter()
+        with patch("app.services.processing.settings.sam_enabled", True), patch(
+            "app.services.processing.settings.sam_only_for_zone_candidates", True
+        ), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(fake_segmenter.calls, [])
+        self.assertEqual(obstructions[0].spatial_method, "yolo_box_fallback")
+
+    def test_no_sam_call_for_irrelevant_class(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("backpack", 0.9, (10, 10, 90, 90))
+        fake_segmenter = FakeSegmenter()
+        with patch("app.services.processing.settings.sam_enabled", True), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(fake_segmenter.calls, [])
+        self.assertFalse(obstructions[0].is_blocking)
+
+    def test_sam_runs_for_zone_candidate_and_uses_mask_metrics(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (45, 10, 95, 90))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[10:90, 45:95] = True
+        segmentation = SegmentationResult(
+            mask=mask,
+            polygon=[(45, 10), (95, 10), (95, 90), (45, 90)],
+            area_pixels=int(mask.sum()),
+            prompt_box=detection.box,
+            score=0.88,
+            model_name="sam2.1_hiera_tiny",
+            inference_ms=14.2,
+        )
+        fake_segmenter = FakeSegmenter(result=segmentation)
+        with patch("app.services.processing.settings.sam_enabled", True), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(len(fake_segmenter.calls), 1)
+        self.assertEqual(obstructions[0].spatial_method, "sam_mask")
+        self.assertIsNotNone(obstructions[0].segmentation)
+        self.assertGreater(obstructions[0].mask_zone_iou, 0)
+
+    def test_segmentation_failure_fail_open_falls_back_to_yolo(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (10, 10, 90, 90))
+        fake_segmenter = FakeSegmenter(error=RuntimeError("checkpoint missing"))
+        with patch("app.services.processing.settings.sam_enabled", True), patch(
+            "app.services.processing.settings.sam_fail_open", True
+        ), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(obstructions[0].spatial_method, "yolo_box_fallback")
+        self.assertTrue(obstructions[0].is_blocking)
+        self.assertIn("checkpoint missing", obstructions[0].fallback_reason)
+
+    def test_segmentation_failure_fail_closed_rejects_candidate(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (10, 10, 90, 90))
+        fake_segmenter = FakeSegmenter(error=RuntimeError("checkpoint missing"))
+        with patch("app.services.processing.settings.sam_enabled", True), patch(
+            "app.services.processing.settings.sam_fail_open", False
+        ), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ):
+            _, obstructions = _evaluate_obstructions(
+                self.camera,
+                [detection],
+                self.camera.exit_zone,
+                image,
+            )
+        self.assertEqual(obstructions[0].spatial_method, "sam_rejected")
+        self.assertFalse(obstructions[0].is_blocking)
+
+    async def test_image_analysis_without_polygon_uses_full_frame_sam_workflow(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (20, 20, 90, 90))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[20:90, 20:90] = True
+        segmentation = SegmentationResult(
+            mask=mask,
+            polygon=[(20, 20), (90, 20), (90, 90), (20, 90)],
+            area_pixels=int(mask.sum()),
+            prompt_box=detection.box,
+            score=0.86,
+            model_name="sam2.1_hiera_tiny",
+            inference_ms=11.5,
+        )
+        fake_detector = FakeDetector([[detection]])
+        fake_segmenter = FakeSegmenter(result=segmentation)
+        with self.SessionLocal() as db, patch(
+            "app.services.processing.get_detector", return_value=fake_detector
+        ), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ), patch(
+            "app.services.processing.settings.sam_enabled", True
+        ), patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision", False
+        ), patch(
+            "app.services.processing.enrich_and_notify", self.noop_notify
+        ), patch(
+            "app.services.processing.event_hub.broadcast", self.noop_broadcast
+        ):
+            result = await analyse_image(db, self.camera, image, [])
+        self.assertEqual(result["zone_mode"], "full_frame")
+        self.assertEqual(len(fake_segmenter.calls), 1)
+        self.assertEqual(result["detections"][0]["spatial_method"], "sam_mask")
+        self.assertEqual(len(result["incidents"]), 1)
+        incidents = self._incidents()
+        self.assertEqual(incidents[0].incident_metadata["zone_mode"], "full_frame")
+
+    async def test_full_frame_image_analysis_uses_detected_class_even_without_class_match(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("chair", 0.81, (20, 20, 90, 90))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[20:90, 20:90] = True
+        segmentation = SegmentationResult(
+            mask=mask,
+            polygon=[(20, 20), (90, 20), (90, 90), (20, 90)],
+            area_pixels=int(mask.sum()),
+            prompt_box=detection.box,
+            score=0.77,
+            model_name="sam2.1_hiera_tiny",
+            inference_ms=9.8,
+        )
+        fake_detector = FakeDetector([[detection]])
+        fake_segmenter = FakeSegmenter(result=segmentation)
+        with self.SessionLocal() as db:
+            camera = db.get(Camera, self.camera.id)
+            camera.blocked_classes = ["car", "truck"]
+            db.commit()
+            with patch(
+                "app.services.processing.get_detector", return_value=fake_detector
+            ), patch(
+                "app.services.processing.get_segmenter", return_value=fake_segmenter
+            ), patch(
+                "app.services.processing.settings.sam_enabled", True
+            ), patch(
+                "app.services.processing.settings.validate_fire_exit_incidents_with_vision", False
+            ), patch(
+                "app.services.processing.enrich_and_notify", self.noop_notify
+            ), patch(
+                "app.services.processing.event_hub.broadcast", self.noop_broadcast
+            ):
+                result = await analyse_image(db, camera, image, [])
+        self.assertEqual(result["zone_mode"], "full_frame")
+        self.assertEqual(result["detections"][0]["label"], "chair")
+        self.assertTrue(result["detections"][0]["is_blocking"])
+        self.assertEqual(result["detections"][0]["spatial_method"], "sam_mask")
+        self.assertEqual(len(fake_segmenter.calls), 1)
+        self.assertEqual(len(result["incidents"]), 1)
+        incidents = self._incidents()
+        self.assertEqual(incidents[0].object_type, "chair")
+        self.assertEqual(incidents[0].incident_metadata["zone_mode"], "full_frame")
+
+    async def test_image_preview_token_reuses_cached_yolo_and_sam_stage(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("car", 0.9, (20, 20, 90, 90))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[20:90, 20:90] = True
+        segmentation = SegmentationResult(
+            mask=mask,
+            polygon=[(20, 20), (90, 20), (90, 90), (20, 90)],
+            area_pixels=int(mask.sum()),
+            prompt_box=detection.box,
+            score=0.86,
+            model_name="sam2.1_hiera_tiny",
+            inference_ms=11.5,
+        )
+        fake_detector = FakeDetector([[detection]])
+        fake_segmenter = FakeSegmenter(result=segmentation)
+        with self.SessionLocal() as db, patch(
+            "app.services.processing.get_detector", return_value=fake_detector
+        ), patch(
+            "app.services.processing.get_segmenter", return_value=fake_segmenter
+        ), patch(
+            "app.services.processing.settings.sam_enabled", True
+        ), patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision", False
+        ), patch(
+            "app.services.processing.enrich_and_notify", self.noop_notify
+        ), patch(
+            "app.services.processing.event_hub.broadcast", self.noop_broadcast
+        ):
+            preview = preview_image_analysis(self.camera, image, [])
+            result = await analyse_image(
+                db,
+                self.camera,
+                image,
+                [],
+                preview_token=preview["preview_token"],
+            )
+        self.assertEqual(preview["zone_mode"], "full_frame")
+        self.assertEqual(result["detections"][0]["spatial_method"], "sam_mask")
+        self.assertEqual(len(fake_segmenter.calls), 1)
+        self.assertEqual(result["incidents"], [self._incidents()[0].id])
+
 
 class ApiFallbackTests(unittest.TestCase):
     def test_image_analysis_without_polygon_helper(self):
@@ -374,28 +782,121 @@ class ApiFallbackTests(unittest.TestCase):
         db.commit()
         try:
             with patch("app.api._read_upload", AsyncMock(return_value=encoded.tobytes())), patch(
-                "app.api.detect_scene_objects",
-                return_value=("yolo", []),
-            ), patch(
-                "app.api.assess_scene",
+                "app.api.analyse_image",
                 AsyncMock(
                     return_value={
-                        "violation": False,
-                        "category": "General",
-                        "summary": "No visible issue.",
-                        "evidence": [],
-                        "confidence": 0.2,
-                        "visible_objects": [],
-                        "supporting_objects": [],
-                        "annotations": [],
-                        "model": "gemma3:27b",
-                        "local": True,
+                        "provider": "yolo",
+                        "detections": [],
+                        "incidents": [],
+                        "annotated_image": "/evidence/preview.jpg",
+                        "zone_mode": "full_frame",
                     }
                 ),
-            ), patch("app.api.create_scene_incident", AsyncMock(return_value=None)):
+            ) as analyse_fire_exit, patch(
+                "app.api.create_scene_incident", AsyncMock(return_value=None)
+            ) as create_scene:
                 result = asyncio.run(analyse_uploaded_image(DummyUpload(), "cam-api", "", db))
-            self.assertEqual(result["summary"], "No visible issue.")
+            self.assertEqual(result["zone_mode"], "full_frame")
             self.assertEqual(result["incidents"], [])
+            analyse_fire_exit.assert_awaited()
+            create_scene.assert_not_awaited()
+        finally:
+            db.close()
+
+    def test_image_analysis_uses_full_frame_path_when_exit_zone_payload_is_empty(self):
+        from app.api import analyse_uploaded_image
+
+        class DummyUpload:
+            filename = "frame.jpg"
+
+        camera = Camera(
+            id="cam-api-empty-zone",
+            name="Cam",
+            facility="Building A",
+            zone="Zone A",
+            exit_zone=[[0, 0], [100, 0], [100, 100], [0, 100]],
+            blocked_classes=[],
+            confidence_threshold=0.35,
+            minimum_overlap=0.25,
+            persistence_seconds=5,
+            alert_cooldown_seconds=300,
+            enabled=True,
+        )
+        image = np.full((20, 20, 3), 60, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".jpg", image)
+        self.assertTrue(ok)
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        db.add(camera)
+        db.commit()
+        try:
+            with patch("app.api._read_upload", AsyncMock(return_value=encoded.tobytes())), patch(
+                "app.api.analyse_image",
+                AsyncMock(
+                    return_value={
+                        "provider": "yolo",
+                        "detections": [],
+                        "incidents": [],
+                        "annotated_image": "/evidence/preview.jpg",
+                        "zone_mode": "full_frame",
+                    }
+                )
+            ) as analyse_fire_exit:
+                result = asyncio.run(analyse_uploaded_image(DummyUpload(), "cam-api-empty-zone", "[]", db))
+            self.assertEqual(result["zone_mode"], "full_frame")
+            analyse_fire_exit.assert_awaited()
+        finally:
+            db.close()
+
+    def test_image_preview_route_uses_preview_pipeline(self):
+        from app.api import preview_uploaded_image_analysis
+
+        class DummyUpload:
+            filename = "frame.jpg"
+
+        camera = Camera(
+            id="cam-api-preview",
+            name="Cam",
+            facility="Building A",
+            zone="Zone A",
+            exit_zone=[],
+            blocked_classes=[],
+            confidence_threshold=0.35,
+            minimum_overlap=0.25,
+            persistence_seconds=5,
+            alert_cooldown_seconds=300,
+            enabled=True,
+        )
+        image = np.full((20, 20, 3), 60, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".jpg", image)
+        self.assertTrue(ok)
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        db.add(camera)
+        db.commit()
+        try:
+            with patch("app.api._read_upload", AsyncMock(return_value=encoded.tobytes())), patch(
+                "app.api.preview_image_analysis",
+                return_value={
+                    "provider": "yolo",
+                    "detections": [],
+                    "incidents": [],
+                    "annotated_image": "/evidence/preview.jpg",
+                    "zone_mode": "full_frame",
+                    "preview_token": "preview-token-1",
+                    "blocking_candidates": 1,
+                    "will_validate_with_vision": True,
+                    "next_step": "Gemma validation",
+                    "telegram_status": "not_sent",
+                },
+            ) as preview_image:
+                result = asyncio.run(preview_uploaded_image_analysis(DummyUpload(), "cam-api-preview", "", db))
+            self.assertEqual(result["preview_token"], "preview-token-1")
+            preview_image.assert_called_once()
         finally:
             db.close()
 
@@ -482,6 +983,17 @@ class SupportServiceTests(unittest.TestCase):
         self.assertEqual(result["category"], "fire_exit_obstruction")
         self.assertEqual(result["confidence"], 1.0)
 
+    def test_fire_exit_validation_parser_preserves_vehicle_identifier(self):
+        result = _parse_fire_exit_validation(
+            '{"confirmed":true,"category":"fire_exit_obstruction","summary":"Vehicle blocks the zone.",'
+            '"visible_evidence":["Vehicle overlaps the marked restricted area"],"confidence":0.91,'
+            '"vehicle_identifier":"ABC1234","vehicle_identifier_type":"license_plate",'
+            '"vehicle_identifier_confidence":0.88}'
+        )
+        self.assertEqual(result["vehicle_identifier"], "ABC1234")
+        self.assertEqual(result["vehicle_identifier_type"], "license_plate")
+        self.assertAlmostEqual(result["vehicle_identifier_confidence"], 0.88)
+
     def test_fire_exit_validation_parser_accepts_chunked_chat_content(self):
         content = _extract_chat_content(
             {
@@ -505,6 +1017,36 @@ class SupportServiceTests(unittest.TestCase):
         self.assertTrue(result["confirmed"])
         self.assertEqual(result["visible_evidence"], ["Vehicle overlaps the doorway"])
         self.assertAlmostEqual(result["confidence"], 0.84)
+
+    def test_fire_exit_validation_prompt_includes_primary_yolo_label(self):
+        with patch(
+            "app.services.scene_reasoning.settings.vision_enabled", True
+        ), patch(
+            "app.services.scene_reasoning._call_vision_model",
+            AsyncMock(
+                return_value='{"confirmed":true,"category":"fire_exit_obstruction","summary":"Chair blocks the route.","visible_evidence":["Chair blocks the route"],"confidence":0.84}'
+            ),
+        ) as call:
+            result = asyncio.run(validate_fire_exit_obstruction(b"image-bytes", object_label="chair"))
+        self.assertTrue(result["confirmed"])
+        self.assertIn("Primary YOLO object: chair.", call.await_args.args[0])
+
+    def test_fire_exit_validation_prompt_is_compact(self):
+        prompt = _build_fire_exit_validation_prompt("chair")
+        self.assertIn("Primary YOLO object: chair.", prompt)
+        self.assertLess(len(prompt), 700)
+
+    def test_prepare_vision_image_bytes_downscales_large_crop(self):
+        image = np.zeros((1600, 1200, 3), dtype=np.uint8)
+        ok, encoded = cv2.imencode(".jpg", image)
+        self.assertTrue(ok)
+        with patch("app.services.scene_reasoning.settings.vision_validation_image_max_dim", 640), patch(
+            "app.services.scene_reasoning.settings.vision_validation_jpeg_quality", 75
+        ):
+            optimized = _prepare_vision_image_bytes(encoded.tobytes())
+        restored = cv2.imdecode(np.frombuffer(optimized, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(restored)
+        self.assertLessEqual(max(restored.shape[:2]), 640)
 
     def test_sop_retrieval_prefers_relevant_procedure(self):
         results = search_sops("fire_exit_obstruction", "Building A", "vehicle")
@@ -532,6 +1074,41 @@ class SupportServiceTests(unittest.TestCase):
             )
             result = cv2.imread(str(destination))
             self.assertIsNotNone(result)
+
+    def test_annotation_with_sam_overlay_is_valid(self):
+        image = synthetic_demo_frame()
+        mask = np.zeros(image.shape[:2], dtype=bool)
+        mask[360:620, 360:790] = True
+        obstruction = Obstruction(
+            Detection("vehicle", 0.9, (350, 350, 780, 625)),
+            0.9,
+            0.9,
+            0.35,
+            True,
+            5.0,
+            segmentation=SegmentationResult(
+                mask=mask,
+                polygon=[(360, 360), (790, 360), (790, 620), (360, 620)],
+                area_pixels=int(mask.sum()),
+                prompt_box=(350, 350, 780, 625),
+                score=0.91,
+                model_name="sam2.1_hiera_tiny",
+                inference_ms=12.8,
+            ),
+            spatial_method="sam_mask",
+            mask_zone_iou=0.44,
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "annotated-sam.jpg"
+            annotate(
+                image,
+                [[250, 100], [850, 100], [850, 680], [250, 680]],
+                [obstruction],
+                destination,
+            )
+            result = cv2.imread(str(destination))
+            self.assertIsNotNone(result)
+            self.assertFalse(np.array_equal(image, result))
 
     def test_scene_violation_annotation_is_valid(self):
         image = np.full((480, 640, 3), 40, dtype=np.uint8)
@@ -653,6 +1230,102 @@ class SupportServiceTests(unittest.TestCase):
         results = search_sops("fire_exit_obstruction", "Building A", "box")
         self.assertTrue(results)
         self.assertEqual(results[0].title, "Fire Exit Obstruction")
+
+    def test_nemo_failure_falls_back_to_local_summary(self):
+        class FailingAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                raise httpx.ConnectError("nemo down")
+
+        with patch("app.services.llm.settings.nemo_agent_enabled", True), patch(
+            "app.services.llm.settings.nemo_agent_required", True
+        ), patch(
+            "app.services.llm.settings.llm_enabled", False
+        ), patch(
+            "app.services.llm.httpx.AsyncClient", FailingAsyncClient
+        ):
+            summary, action = asyncio.run(
+                create_grounded_summary(
+                    {
+                        "object_type": "car",
+                        "zone": "South Access Zone",
+                        "facility": "Building A",
+                        "confidence": 0.91,
+                        "overlap": 0.42,
+                    },
+                    search_sops("fire_exit_obstruction", "Building A", "car"),
+                )
+            )
+        self.assertIn("Car detected", summary)
+        self.assertTrue(action)
+
+    def test_llm_runtime_status_reports_model_availability(self):
+        with patch("app.services.llm.settings.llm_enabled", True), patch(
+            "app.services.llm.settings.llm_model", "google/gemma-4-12B-it"
+        ), patch(
+            "app.services.llm.settings.llm_base_url", "http://127.0.0.1:8001/v1"
+        ), patch(
+            "app.services.llm.settings.llm_api_key", ""
+        ), patch(
+            "app.services.llm.settings.llm_timeout_seconds", 30.0
+        ), patch(
+            "app.services.llm.list_models",
+            AsyncMock(return_value=["google/gemma-4-12B-it"]),
+        ):
+            status = asyncio.run(llm_runtime_status())
+
+        self.assertTrue(status["enabled"])
+        self.assertTrue(status["reachable"])
+        self.assertTrue(status["model_available"])
+        self.assertEqual(status["detail"], "ready")
+
+    def test_incident_schema_exposes_segmentation_fields(self):
+        incident = Incident(
+            id="INC-SAM-001",
+            camera_id="cam-1",
+            facility="Building A",
+            zone="South Access Zone",
+            event_type="exit_blocked",
+            object_type="car",
+            confidence=0.91,
+            overlap=0.4,
+            duration_seconds=12.0,
+            status="open",
+            severity="high",
+            first_seen=datetime.now(timezone.utc),
+            last_seen=datetime.now(timezone.utc),
+            incident_metadata={
+                "spatial_method": "sam_mask",
+                "object_intrusion_ratio": 0.42,
+                "exit_blockage_ratio": 0.18,
+                "mask_zone_iou": 0.11,
+                "sam_polygon": [[1, 2], [3, 4], [5, 6]],
+                "sam_model": "sam2.1_hiera_tiny",
+                "sam_score": 0.83,
+                "sam_inference_ms": 12.5,
+            },
+            summary="Car blocks the exit.",
+            recommended_action="Notify Facilities Security.",
+            sop_title="Fire Exit Obstruction",
+            sop_sources=[],
+            telegram_status="sent",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        from app.schemas import IncidentOut
+
+        payload = IncidentOut.model_validate(incident)
+        self.assertEqual(payload.spatial_method, "sam_mask")
+        self.assertEqual(payload.sam_model, "sam2.1_hiera_tiny")
+        self.assertEqual(payload.sam_polygon, [[1, 2], [3, 4], [5, 6]])
 
 
 if __name__ == "__main__":

@@ -119,6 +119,7 @@ _INCIDENT_ID_PATTERN = re.compile(r"INC-\d{8}-\d{6}-\d{3}", re.IGNORECASE)
 def _incident_context(incident: Incident | None) -> dict | None:
     if incident is None:
         return None
+    metadata = incident.incident_metadata or {}
     return {
         "incident_id": incident.id,
         "facility": incident.facility,
@@ -130,6 +131,17 @@ def _incident_context(incident: Incident | None) -> dict | None:
         "confidence": incident.confidence,
         "summary": incident.summary,
         "recommended_action": incident.recommended_action,
+        "spatial_method": metadata.get("spatial_method"),
+        "object_intrusion_ratio": metadata.get("object_intrusion_ratio"),
+        "exit_blockage_ratio": metadata.get("exit_blockage_ratio"),
+        "mask_zone_iou": metadata.get("mask_zone_iou"),
+        "sam_model": metadata.get("sam_model"),
+        "yolo_box": metadata.get("yolo_box"),
+        "yolo_class": metadata.get("yolo_class"),
+        "yolo_confidence": metadata.get("yolo_confidence"),
+        "vehicle_identifier": metadata.get("vehicle_identifier"),
+        "vehicle_identifier_type": metadata.get("vehicle_identifier_type"),
+        "vehicle_identifier_confidence": metadata.get("vehicle_identifier_confidence"),
         "created_at": incident.created_at.astimezone(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         ),
@@ -255,6 +267,7 @@ def _keyboard(incident_id: str) -> dict:
 
 def _alert_text(incident) -> str:
     incident_time = getattr(incident, "created_at", None) or getattr(incident, "first_seen", None)
+    metadata = getattr(incident, "incident_metadata", {}) or {}
     if isinstance(incident_time, datetime):
         if incident_time.tzinfo is None:
             incident_time = incident_time.replace(tzinfo=timezone.utc)
@@ -268,15 +281,76 @@ def _alert_text(incident) -> str:
         if incident.event_type in {"exit_blocked", "fire_exit_obstruction"}
         else incident.object_type.replace("_", " ").upper()
     )
+    intrusion = float(metadata.get("object_intrusion_ratio", getattr(incident, "overlap", 0)) or 0)
+    blockage = float(metadata.get("exit_blockage_ratio", 0) or 0)
+    duration = float(metadata.get("blocked_duration_seconds", getattr(incident, "duration_seconds", 0)) or 0)
+    method = str(metadata.get("spatial_method") or "yolo_box_fallback")
+    method_label = "SAM mask" if method == "sam_mask" else "YOLO bounding box"
+    first_action = (
+        str(incident.recommended_action).splitlines()[0].strip()
+        if str(getattr(incident, "recommended_action", "")).strip()
+        else "Confirm the location and notify Facilities Security."
+    )
+    vehicle_identifier = str(metadata.get("vehicle_identifier") or "").strip()
+    vehicle_identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    vehicle_identifier_line = (
+        f"Vehicle identifier: {vehicle_identifier}"
+        f"{f' ({vehicle_identifier_type.replace('_', ' ')})' if vehicle_identifier_type and vehicle_identifier_type != 'none' else ''}\n"
+        if vehicle_identifier
+        else ""
+    )
     return (
         f"🚨 {event_name} VIOLATION DETECTED\n\n"
         f"Location: {incident.facility} – {incident.zone}\n"
         f"Detected: {incident_time_text}\n"
+        f"Object type: {incident.object_type}\n"
+        f"{vehicle_identifier_line}"
+        f"YOLO confidence: {incident.confidence:.0%}\n"
+        f"Object inside zone: {intrusion:.0%}\n"
+        f"Exit area blocked: {blockage:.0%}\n"
+        f"Blocked duration: {duration:.1f}s\n"
+        f"Segmentation method: {method_label}\n"
         f"Violation: {incident.summary}\n"
-        f"Confidence: {incident.confidence:.0%}\n"
         f"Incident: {incident.id}\n\n"
+        f"Recommended first action: {first_action}\n\n"
         f"Required response:\n{incident.recommended_action}"
     )
+
+
+def _alert_caption(incident, limit: int = 900) -> str:
+    metadata = getattr(incident, "incident_metadata", {}) or {}
+    method = str(metadata.get("spatial_method") or "yolo_box_fallback")
+    method_label = "SAM mask" if method == "sam_mask" else "YOLO bounding box"
+    intrusion = float(metadata.get("object_intrusion_ratio", getattr(incident, "overlap", 0)) or 0)
+    blockage = float(metadata.get("exit_blockage_ratio", 0) or 0)
+    duration = float(metadata.get("blocked_duration_seconds", getattr(incident, "duration_seconds", 0)) or 0)
+    first_action = (
+        str(getattr(incident, "recommended_action", "") or "").splitlines()[0].strip()
+        or "Confirm the location and notify Facilities Security."
+    )
+    vehicle_identifier = str(metadata.get("vehicle_identifier") or "").strip()
+    vehicle_identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    lines = [
+        f"Incident: {incident.id}",
+        f"Object: {incident.object_type}",
+        *(
+            [
+                "Vehicle ID: "
+                f"{vehicle_identifier}"
+                f"{f' ({vehicle_identifier_type.replace('_', ' ')})' if vehicle_identifier_type and vehicle_identifier_type != 'none' else ''}"
+            ]
+            if vehicle_identifier
+            else []
+        ),
+        f"YOLO confidence: {incident.confidence:.0%}",
+        f"Object inside zone: {intrusion:.0%}",
+        f"Exit area blocked: {blockage:.0%}",
+        f"Blocked duration: {duration:.1f}s",
+        f"Segmentation: {method_label}",
+        f"First action: {first_action}",
+    ]
+    caption = "\n".join(lines)
+    return caption if len(caption) <= limit else caption[: limit - 1].rstrip() + "…"
 
 
 async def _send_to_chat(
@@ -288,18 +362,31 @@ async def _send_to_chat(
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
     data = {
         "chat_id": chat_id,
-        "caption": _alert_text(incident),
         "reply_markup": json.dumps(_keyboard(incident.id)),
     }
     if evidence is not None:
-        with evidence.open("rb") as image:
-            response = await client.post(
-                f"{url}/sendPhoto",
-                data=data,
-                files={"photo": (evidence.name, image, "image/jpeg")},
-            )
+        data["caption"] = _alert_caption(incident)
+        try:
+            with evidence.open("rb") as image:
+                response = await client.post(
+                    f"{url}/sendPhoto",
+                    data=data,
+                    files={"photo": (evidence.name, image, "image/jpeg")},
+                )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            retry_data = dict(data)
+            retry_data.pop("caption", None)
+            with evidence.open("rb") as image:
+                response = await client.post(
+                    f"{url}/sendPhoto",
+                    data=retry_data,
+                    files={"photo": (evidence.name, image, "image/jpeg")},
+                )
     else:
-        data["text"] = data.pop("caption")
+        data["text"] = _alert_text(incident)
         response = await client.post(f"{url}/sendMessage", data=data)
     response.raise_for_status()
     return str(response.json()["result"]["message_id"])

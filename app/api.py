@@ -26,12 +26,17 @@ from app.database import SessionLocal, get_db
 from app.models import AnalysisJob, Camera, Incident, TelegramSubscriber
 from app.schemas import CameraIn, CameraOut, IncidentOut, JobOut
 from app.services.cv.detector import get_detector
+from app.services.cv.roi_engine import validate_polygon
+from app.services.cv.segmenter import segmenter_runtime_status
+from app.services.llm import llm_runtime_status
+from app.services.llm import nemo_agent_runtime_status
 from app.services.processing import (
     analyse_image,
     create_scene_incident,
     detect_scene_objects,
     ground_scene_assessment,
     parse_scene_detections_payload,
+    preview_image_analysis,
     process_video_job,
     serialize_scene_detections,
     synthetic_demo_frame,
@@ -53,9 +58,20 @@ from app.services.telegram import (
 router = APIRouter(prefix="/api")
 
 
-def _parse_polygon(raw: str, camera: Camera, required: bool = True) -> list[list[float]]:
+def _parse_polygon(
+    raw: str,
+    camera: Camera,
+    required: bool = True,
+    use_camera_default: bool = True,
+) -> list[list[float]]:
     try:
-        polygon = json.loads(raw) if raw else camera.exit_zone
+        polygon = (
+            json.loads(raw)
+            if raw
+            else camera.exit_zone
+            if use_camera_default
+            else []
+        )
     except json.JSONDecodeError as exc:
         raise HTTPException(422, "exit_zone must be valid JSON") from exc
     if not polygon or len(polygon) < 3:
@@ -127,7 +143,9 @@ async def health(db: Session = Depends(get_db)):
         detector_name = get_detector().name
     except Exception as exc:
         detector_status = str(exc)
+    llm_status = await llm_runtime_status()
     vision_status = await vision_runtime_status()
+    nemo_status = await nemo_agent_runtime_status()
     latest_incident = db.scalar(select(Incident).order_by(Incident.created_at.desc()))
     recipients = subscriber_chat_ids(db)
     return {
@@ -138,12 +156,14 @@ async def health(db: Session = Depends(get_db)):
             "enabled": settings.llm_enabled,
             "model": settings.llm_model,
             "base_url": settings.llm_base_url,
+            **llm_status,
         },
         "nemo_agent": {
             "enabled": settings.nemo_agent_enabled,
             "required": settings.nemo_agent_required,
             "model": settings.nemo_agent_model,
             "base_url": settings.nemo_agent_base_url,
+            **nemo_status,
         },
         "vision": {
             "enabled": settings.vision_enabled,
@@ -151,6 +171,7 @@ async def health(db: Session = Depends(get_db)):
             "base_url": settings.vision_base_url,
             **vision_status,
         },
+        "sam": segmenter_runtime_status(),
         "telegram_configured": is_configured(),
         "telegram_subscribers": db.scalar(
             select(func.count())
@@ -272,27 +293,61 @@ async def analyse_uploaded_image(
     exit_zone: str = Form(""),
     db: Session = Depends(get_db),
     scene_detections: str = Form(""),
+    preview_token: str = Form(""),
 ):
     camera = db.get(Camera, camera_id)
     if not camera:
         raise HTTPException(404, "Camera not found")
     content = await _read_upload(file)
     image = _decode_uploaded_image(content)
-    polygon = _parse_polygon(exit_zone, camera, required=False)
-    if polygon and exit_zone:
-        camera.exit_zone = polygon
-        db.commit()
     try:
-        if not polygon:
-            provided_detections = _scene_detections_from_form(scene_detections)
-            return await _analyse_scene_upload(
-                db,
-                camera,
-                content,
-                image,
-                scene_detections=provided_detections,
-            )
-        return await analyse_image(db, camera, image, polygon)
+        polygon = _parse_polygon(
+            exit_zone,
+            camera,
+            required=False,
+            use_camera_default=False,
+        )
+        if polygon and exit_zone:
+            try:
+                validate_polygon(polygon)
+            except ValueError:
+                polygon = []
+            else:
+                camera.exit_zone = polygon
+                db.commit()
+        return await analyse_image(db, camera, image, polygon, preview_token=preview_token)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/analyse/image/preview")
+async def preview_uploaded_image_analysis(
+    file: UploadFile = File(...),
+    camera_id: str = Form(...),
+    exit_zone: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    camera = db.get(Camera, camera_id)
+    if not camera:
+        raise HTTPException(404, "Camera not found")
+    content = await _read_upload(file)
+    image = _decode_uploaded_image(content)
+    try:
+        polygon = _parse_polygon(
+            exit_zone,
+            camera,
+            required=False,
+            use_camera_default=False,
+        )
+        if polygon and exit_zone:
+            try:
+                validate_polygon(polygon)
+            except ValueError:
+                polygon = []
+            else:
+                camera.exit_zone = polygon
+                db.commit()
+        return preview_image_analysis(camera, image, polygon)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(422, str(exc)) from exc
 

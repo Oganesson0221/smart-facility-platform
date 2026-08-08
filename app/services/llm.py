@@ -1,9 +1,17 @@
 import json
+import logging
 
 import httpx
 
 from app.config import settings
+from app.services.openai_compat import chat_completions
+from app.services.openai_compat import coerce_text_content
+from app.services.openai_compat import extract_chat_message_content
+from app.services.openai_compat import list_models
 from app.services.sop import SOPResult
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """You are the Smart Facility Platform safety incident assistant.
@@ -19,6 +27,70 @@ fields. Never invent procedures. Answer the user's question directly in plain
 text. If the user asks what to do next, give concise numbered steps. If the
 question is ambiguous, ask for the incident ID or say you are using the latest
 incident context if one was supplied. Keep the reply under 120 words."""
+
+
+async def nemo_agent_runtime_status() -> dict[str, object]:
+    if not settings.nemo_agent_enabled:
+        return {"enabled": False, "reachable": False, "detail": "disabled"}
+
+    try:
+        await chat_completions(
+            base_url=settings.nemo_agent_base_url,
+            api_key=settings.nemo_agent_api_key,
+            timeout_seconds=min(8.0, settings.nemo_agent_timeout_seconds),
+            model=settings.nemo_agent_model,
+            messages=[
+                {"role": "system", "content": "Return the word ok."},
+                {"role": "user", "content": "ok"},
+            ],
+            temperature=0,
+        )
+        return {"enabled": True, "reachable": True, "detail": "ready"}
+    except httpx.HTTPStatusError as exc:
+        return {
+            "enabled": True,
+            "reachable": False,
+            "detail": f"HTTP {exc.response.status_code}",
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "enabled": True,
+            "reachable": False,
+            "detail": str(exc),
+        }
+
+
+async def llm_runtime_status() -> dict[str, object]:
+    if not settings.llm_enabled:
+        return {"enabled": False, "reachable": False, "model_available": False}
+
+    timeout = min(5.0, settings.llm_timeout_seconds)
+    try:
+        models = await list_models(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            timeout_seconds=timeout,
+        )
+    except httpx.HTTPError as exc:
+        return {
+            "enabled": True,
+            "reachable": False,
+            "model_available": False,
+            "detail": str(exc),
+            "available_models": [],
+        }
+
+    return {
+        "enabled": True,
+        "reachable": True,
+        "model_available": settings.llm_model in models,
+        "available_models": models,
+        "detail": (
+            "ready"
+            if settings.llm_model in models
+            else f"Configured model '{settings.llm_model}' is not available"
+        ),
+    }
 
 
 def _fallback(incident: dict, sops: list[SOPResult]) -> tuple[str, str]:
@@ -72,22 +144,6 @@ def _parse_result(content: str, fallback: tuple[str, str]) -> tuple[str, str]:
     )
 
 
-def _coerce_text_content(content: object) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str) and item.strip():
-                parts.append(item.strip())
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text).strip())
-        return "\n".join(part for part in parts if part).strip()
-    return str(content).strip()
-
-
 def _fallback_telegram_answer(
     question: str,
     incident: dict | None,
@@ -134,7 +190,10 @@ def _fallback_telegram_answer(
     )
 
 
-async def create_grounded_summary(incident: dict, sops: list[SOPResult]) -> tuple[str, str]:
+async def create_grounded_summary_direct(
+    incident: dict,
+    sops: list[SOPResult],
+) -> tuple[str, str]:
     fallback = _fallback(incident, sops)
     excerpts = [
         {"title": sop.title, "metadata": sop.metadata, "content": sop.content[:3000]}
@@ -143,64 +202,48 @@ async def create_grounded_summary(incident: dict, sops: list[SOPResult]) -> tupl
     user_content = json.dumps({"incident": incident, "sops": excerpts}, default=str)
 
     if settings.nemo_agent_enabled:
-        payload = {
-            "model": settings.nemo_agent_model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.1,
-            "stream": False,
-        }
-        headers = {}
-        if settings.nemo_agent_api_key:
-            headers["Authorization"] = f"Bearer {settings.nemo_agent_api_key}"
         try:
-            async with httpx.AsyncClient(
-                timeout=settings.nemo_agent_timeout_seconds
-            ) as client:
-                response = await client.post(
-                    f"{settings.nemo_agent_base_url.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            payload = await chat_completions(
+                base_url=settings.nemo_agent_base_url,
+                api_key=settings.nemo_agent_api_key,
+                timeout_seconds=settings.nemo_agent_timeout_seconds,
+                model=settings.nemo_agent_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+            )
+            content = extract_chat_message_content(payload)
             return _parse_result(content, fallback)
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-            if settings.nemo_agent_required:
-                raise RuntimeError("NVIDIA NeMo Agent Toolkit workflow is unavailable")
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.warning(
+                "NeMo agent workflow unavailable; falling back to local summary path: %s",
+                exc,
+            )
 
     if not settings.llm_enabled:
         return fallback
 
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
-    headers = {}
-    if settings.llm_api_key:
-        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
     try:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.post(
-                f"{settings.llm_base_url.rstrip('/')}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        payload = await chat_completions(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            timeout_seconds=settings.llm_timeout_seconds,
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.1,
+        )
+        content = extract_chat_message_content(payload)
         return _parse_result(content, fallback)
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return fallback
 
 
-async def answer_sop_question(
+async def answer_sop_question_direct(
     question: str,
     incident: dict | None,
     sop_reference_path: str,
@@ -224,29 +267,19 @@ async def answer_sop_question(
     )
 
     if settings.nemo_agent_enabled:
-        payload = {
-            "model": settings.nemo_agent_model,
-            "messages": [
-                {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.1,
-            "stream": False,
-        }
-        headers = {}
-        if settings.nemo_agent_api_key:
-            headers["Authorization"] = f"Bearer {settings.nemo_agent_api_key}"
         try:
-            async with httpx.AsyncClient(
-                timeout=settings.nemo_agent_timeout_seconds
-            ) as client:
-                response = await client.post(
-                    f"{settings.nemo_agent_base_url.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-            content = _coerce_text_content(response.json()["choices"][0]["message"]["content"])
+            payload = await chat_completions(
+                base_url=settings.nemo_agent_base_url,
+                api_key=settings.nemo_agent_api_key,
+                timeout_seconds=settings.nemo_agent_timeout_seconds,
+                model=settings.nemo_agent_model,
+                messages=[
+                    {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+            )
+            content = coerce_text_content(extract_chat_message_content(payload))
             return content or fallback
         except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             # The Telegram assistant must still answer from the local SOP reference
@@ -256,26 +289,42 @@ async def answer_sop_question(
     if not settings.llm_enabled:
         return fallback
 
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.1,
-    }
-    headers = {}
-    if settings.llm_api_key:
-        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
     try:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.post(
-                f"{settings.llm_base_url.rstrip('/')}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-        content = _coerce_text_content(response.json()["choices"][0]["message"]["content"])
+        payload = await chat_completions(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            timeout_seconds=settings.llm_timeout_seconds,
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.1,
+        )
+        content = coerce_text_content(extract_chat_message_content(payload))
         return content or fallback
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return fallback
+
+
+async def create_grounded_summary(
+    incident: dict,
+    sops: list[SOPResult],
+) -> tuple[str, str]:
+    return await create_grounded_summary_direct(incident, sops)
+
+
+async def answer_sop_question(
+    question: str,
+    incident: dict | None,
+    sop_reference_path: str,
+    sop_reference_text: str,
+    sops: list[SOPResult],
+) -> str:
+    return await answer_sop_question_direct(
+        question,
+        incident,
+        sop_reference_path,
+        sop_reference_text,
+        sops,
+    )

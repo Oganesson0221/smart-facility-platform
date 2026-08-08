@@ -42,6 +42,18 @@ class IncidentOut(BaseModel):
     evidence_image: str | None
     evidence_clip: str | None
     incident_metadata: dict[str, Any]
+    segmentation: dict[str, Any] | None = None
+    sam_polygon: list[list[int]] | None = None
+    sam_model: str | None = None
+    sam_score: float | None = None
+    sam_inference_ms: float | None = None
+    spatial_method: str | None = None
+    object_intrusion_ratio: float | None = None
+    exit_blockage_ratio: float | None = None
+    mask_zone_iou: float | None = None
+    vehicle_identifier: str | None = None
+    vehicle_identifier_type: str | None = None
+    vehicle_identifier_confidence: float | None = None
     summary: str
     recommended_action: str
     sop_title: str

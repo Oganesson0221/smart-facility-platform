@@ -7,6 +7,11 @@ const state = {
   image: null,
   polygon: [],
   currentStatus: "",
+  runtime: {
+    samEnabled: false,
+    samReady: false,
+    samDetail: "",
+  },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -75,10 +80,54 @@ function notificationDetail(status = "") {
   return `Telegram status: ${value}.`;
 }
 
+function cameraPolygon(camera) {
+  return (camera?.exit_zone || []).map(([x, y]) => [Number(x), Number(y)]);
+}
+
+function formatPercent(value = 0) {
+  return `${Math.round((Number(value) || 0) * 100)}%`;
+}
+
+function segmentationMethodLabel(method = "") {
+  const value = String(method || "").toLowerCase();
+  if (value === "sam_mask") return "SAM mask";
+  if (value === "sam_rejected") return "SAM rejected";
+  return "YOLO bounding box";
+}
+
+function zoneModeLabel(mode = "") {
+  return String(mode || "").toLowerCase() === "full_frame"
+    ? "Whole frame"
+    : "Drawn polygon";
+}
+
 function escapeHtml(value = "") {
   const node = document.createElement("div");
   node.textContent = value;
   return node.innerHTML;
+}
+
+function detailCard(title, body, open = false) {
+  return `
+    <details class="detail-card"${open ? " open" : ""}>
+      <summary>${escapeHtml(title)}</summary>
+      <div class="detail-body">${body}</div>
+    </details>`;
+}
+
+function compactDetail(detail = "") {
+  const value = String(detail || "").trim();
+  if (!value) return "Waiting for runtime.";
+  return value.length > 96 ? `${value.slice(0, 93)}...` : value;
+}
+
+function setRuntimeNode(selector, title, hint, tone = "") {
+  const node = $(selector);
+  node.classList.remove("error", "warning");
+  if (tone) node.classList.add(tone);
+  node.querySelector("strong").textContent = title;
+  const hintNode = node.querySelector("em");
+  if (hintNode) hintNode.textContent = hint;
 }
 
 function detectionText(item) {
@@ -151,16 +200,224 @@ function sceneDetectionListMarkup(detections = []) {
     </div>`;
 }
 
+function fireExitWorkflowMarkup(result, blocked) {
+  const fullFrame = String(result.zone_mode || "").toLowerCase() === "full_frame";
+  const samUsed = (result.detections || []).some(item => item.spatial_method === "sam_mask");
+  const fallbacks = (result.detections || []).filter(item =>
+    item.spatial_method !== "sam_mask" && (item.fallback_reason || item.segmentation_state === "fallback")
+  ).length;
+  const steps = [
+    ["YOLO detection", `${(result.detections || []).length} candidate${(result.detections || []).length === 1 ? "" : "s"} scored locally`],
+    [fullFrame ? "Full-frame pre-check" : "Fire-exit zone pre-check", fullFrame
+      ? "No polygon was drawn, so the whole image became the comparison zone for relevant obstruction classes"
+      : "Only relevant obstruction classes near the polygon were considered for segmentation"],
+    ["SAM segmentation", samUsed
+      ? fullFrame
+        ? "YOLO boxes prompted SAM for relevant obstruction classes across the full image"
+        : "YOLO boxes prompted SAM on zone candidates"
+      : "No candidate required SAM or segmentation fell back"],
+    ["Mask overlap calculation", samUsed ? "Mask-based intrusion and blockage metrics were computed" : "Existing YOLO bounding-box overlap stayed active"],
+    ["Persistence", state.mediaMode === "video" ? "Track persistence remains required before incident creation" : "Still-image path does not require persistence"],
+    ["Local vision validation", blocked.length ? "Multimodal validation ran only after deterministic checks passed" : "Multimodal validation was skipped because no obstruction was confirmed"],
+    ["SOP retrieval", blocked.length ? "Existing NeMo SOP workflow remained in the incident path" : "SOP retrieval was not invoked"],
+    ["Incident notification", blocked.length ? `Incident evidence stored${result.incidents.length ? " and notification path triggered" : ""}` : "No incident was created"],
+  ];
+  return `
+    <div class="analysis-steps">
+      ${steps.map(([title, detail], index) => `
+        <div class="analysis-step done">
+          <b>${index + 1}</b>
+          <div class="analysis-step-copy">
+            <span class="analysis-step-title">${escapeHtml(title)}</span>
+            <small>${escapeHtml(detail)}</small>
+          </div>
+        </div>
+      `).join("")}
+      ${fallbacks ? `
+        <div class="analysis-step">
+          <b>i</b>
+          <div class="analysis-step-copy">
+            <span class="analysis-step-title">Fallback detail</span>
+            <small>${fallbacks} detection${fallbacks === 1 ? "" : "s"} used the YOLO bounding-box path.</small>
+          </div>
+        </div>
+      ` : ""}
+    </div>`;
+}
+
+function fireExitDetectionListMarkup(detections = []) {
+  if (!detections.length) {
+    return `
+      <div class="detection-detail-list">
+        <div class="detection-detail-row">
+          <div class="detection-detail-main">
+            <strong>No detections</strong>
+            <small>The detector did not return any supported objects above the current threshold.</small>
+          </div>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="detection-detail-list">
+      ${detections.map(item => {
+        const box = (item.yolo_box || item.box || []).join(", ");
+        const track = item.track_id ?? "n/a";
+        const summary = item.segmentation
+          ? `SAM model ${item.sam_model || "sam"} segmented the YOLO ${item.label} detection from box [${box}] into a ${item.sam_polygon?.length || 0}-point polygon.`
+          : item.spatial_method === "sam_rejected"
+            ? `Segmentation failed in fail-closed mode. Reason: ${item.fallback_reason || "unknown"}.`
+            : item.fallback_reason
+              ? `Segmentation unavailable. Falling back to the YOLO bounding-box overlap path. Reason: ${item.fallback_reason}.`
+              : `YOLO box [${box}] remained the spatial method for this detection.`;
+        return `
+          <div class="detection-detail-row ${item.is_blocking ? "blocking" : ""}">
+            <div class="detection-detail-main">
+              <strong>${escapeHtml(item.label)}</strong>
+              <small>${formatPercent(item.confidence)} confidence · track ${escapeHtml(String(track))} · ${escapeHtml(segmentationMethodLabel(item.spatial_method))}</small>
+            </div>
+            <div class="detection-detail-metrics">
+              <span>YOLO box [${escapeHtml(box)}]</span>
+              <span>Inside zone ${formatPercent(item.object_intrusion_ratio)}</span>
+              <span>Exit blocked ${formatPercent(item.exit_blockage_ratio)}</span>
+              ${item.mask_zone_iou != null ? `<span>Mask IoU ${formatPercent(item.mask_zone_iou)}</span>` : ""}
+              ${item.sam_inference_ms != null ? `<span>SAM ${Math.round(item.sam_inference_ms)} ms</span>` : ""}
+            </div>
+            <p class="detection-detail-copy">${escapeHtml(summary)}</p>
+          </div>`;
+      }).join("")}
+    </div>`;
+}
+
 function renderSceneReady() {
   if (state.mediaMode !== "image" || !state.file || state.polygon.length >= 3) return;
+  const samActive = state.runtime.samEnabled && state.runtime.samReady;
   $("#analysisResult").innerHTML = `
     <article class="panel result-copy scene-progress-card">
-      <p class="eyebrow mint">Scene workflow ready</p>
-      <h3>YOLO will run before local vision reasoning</h3>
-      ${sceneWorkflowMarkup("idle")}
-      <p>After you click analyse, the app will first show the YOLO detections with confidence scores, then send those detections to the local vision model for further reasoning.</p>
-      <p class="privacy-copy">This image path uses YOLO first, then local vision reasoning.</p>
+      <p class="eyebrow mint">${samActive ? "Full-frame workflow ready" : "Full-frame fallback ready"}</p>
+      <h3>${samActive ? "YOLO, SAM, and local vision are ready" : "YOLO is ready and SAM will fall back if needed"}</h3>
+      <div class="scene-metric-grid">
+        <div class="scene-metric">
+          <span>Zone basis</span>
+          <strong>Whole frame</strong>
+        </div>
+        <div class="scene-metric">
+          <span>Segmentation</span>
+          <strong>${samActive ? "SAM active" : "YOLO fallback"}</strong>
+        </div>
+      </div>
+      <p>${samActive
+        ? "Run the image as-is, or draw a polygon if you want to limit the decision area."
+        : "Run the image as-is. If SAM is not available, the app keeps the box-overlap path active."}</p>
+      ${detailCard("What will run", sceneWorkflowMarkup("idle"))}
+      <p class="privacy-copy">Draw a polygon only when you want to restrict analysis to a specific clearance area.</p>
     </article>`;
+}
+
+function analysisLegendMarkup(fullFrame) {
+  return `
+    <div class="detection-chips">
+      <span class="chip">Rectangle: YOLO detection</span>
+      <span class="chip">Filled contour: SAM object mask</span>
+      <span class="chip">${fullFrame ? "Green frame: analysis zone" : "Green polygon: fire-exit clearance zone"}</span>
+    </div>`;
+}
+
+function fireExitWorkflowPreviewMarkup(result) {
+  const fullFrame = String(result.zone_mode || "").toLowerCase() === "full_frame";
+  const samUsed = (result.detections || []).some(item => item.spatial_method === "sam_mask");
+  const fallbacks = (result.detections || []).filter(item =>
+    item.spatial_method !== "sam_mask" && (item.fallback_reason || item.segmentation_state === "fallback")
+  ).length;
+  const blocked = Number(result.blocking_candidates || 0);
+  const steps = [
+    ["YOLO detection", `${(result.detections || []).length} candidate${(result.detections || []).length === 1 ? "" : "s"} identified locally`],
+    [fullFrame ? "Full-frame pre-check" : "Fire-exit zone pre-check", fullFrame
+      ? "The whole image is being used as the comparison zone because no polygon was drawn"
+      : "Only detections near the drawn zone were considered for segmentation"],
+    ["SAM segmentation", samUsed
+      ? "Relevant YOLO boxes were refined into SAM masks and polygons"
+      : fallbacks
+        ? `SAM was unavailable for ${fallbacks} candidate${fallbacks === 1 ? "" : "s"}, so the YOLO box fallback stayed active`
+      : "No candidate required SAM or segmentation fell back to the YOLO box path"],
+    ["Mask overlap calculation", blocked
+      ? `${blocked} candidate${blocked === 1 ? "" : "s"} met the deterministic intrusion/blockage thresholds`
+      : "No detection met the deterministic obstruction thresholds"],
+    ["Local vision validation", result.will_validate_with_vision
+      ? "Confirmed candidates are being sent to the multimodal validator now"
+      : blocked
+        ? "Multimodal validation is disabled, so the workflow will finalize directly"
+        : "Multimodal validation is skipped because no obstruction was confirmed"],
+    ["Incident notification", blocked
+      ? "Telegram and SOP steps will run after validation and incident creation"
+      : "No alert will be sent unless a blocking candidate is confirmed"],
+  ];
+  return `
+    <div class="analysis-steps">
+      ${steps.map(([title, detail], index) => `
+        <div class="analysis-step ${index < 4 ? "done" : index === 4 ? "active" : ""}">
+          <b>${index + 1}</b>
+          <div class="analysis-step-copy">
+            <span class="analysis-step-title">${escapeHtml(title)}</span>
+            <small>${escapeHtml(detail)}</small>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+}
+
+function renderAnalysisPreview(result) {
+  const fullFrame = String(result.zone_mode || "").toLowerCase() === "full_frame";
+  const blocked = Number(result.blocking_candidates || 0);
+  $("#analysisResult").innerHTML = `
+    <article class="panel result-card scene-result-card">
+      <img src="${result.annotated_image}?t=${Date.now()}" alt="Deterministic YOLO and SAM preview">
+      <div class="result-copy">
+        <p class="eyebrow mint">${escapeHtml(result.provider)} deterministic preview</p>
+        <h3>${blocked
+          ? "Deterministic checks found a candidate"
+          : "Deterministic checks completed"}</h3>
+        <div class="scene-metric-grid">
+          <div class="scene-metric">
+            <span>Zone basis</span>
+            <strong>${escapeHtml(zoneModeLabel(result.zone_mode))}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Detections</span>
+            <strong>${(result.detections || []).length}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Blocking candidates</span>
+            <strong>${blocked}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Next step</span>
+            <strong>${escapeHtml(result.next_step || "Finalization")}</strong>
+          </div>
+        </div>
+        <p class="result-summary-copy">${blocked
+          ? "YOLO and SAM finished the deterministic pass. Multimodal validation is next."
+          : "YOLO and SAM finished the deterministic pass. No blocking candidate needs escalation yet."}</p>
+        ${detailCard("Workflow details", fireExitWorkflowPreviewMarkup(result), true)}
+        ${detailCard("Detection details", fireExitDetectionListMarkup(result.detections || []))}
+        ${detailCard("Overlay legend", analysisLegendMarkup(fullFrame))}
+        <p class="privacy-copy">${result.will_validate_with_vision
+          ? "Deterministic CV completed on this machine. Multimodal validation is running now for the confirmed candidate set."
+          : "Deterministic CV completed on this machine. No multimodal validation request is needed for the current result."}</p>
+      </div>
+    </article>`;
+}
+
+function buildImageAnalysisForm(useFullFrame, previewToken = "") {
+  const form = new FormData();
+  form.append("file", state.file);
+  form.append("camera_id", state.selectedCamera.id);
+  form.append("exit_zone", useFullFrame ? "" : JSON.stringify(state.polygon));
+  if (previewToken) form.append("preview_token", previewToken);
+  return form;
+}
+
+function flushUiFrame() {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
 
 function go(view) {
@@ -181,40 +438,69 @@ function go(view) {
 async function loadHealth() {
   try {
     const health = await api("/api/health");
-    $("#systemText").textContent = health.vision?.enabled
-      ? `${health.vision.model} · local vision`
-      : `${health.detector} · local`;
-    $("#visionRuntimeText").textContent = health.vision?.enabled
-      ? health.vision.model
-      : health.detector;
-    $("#agentRuntimeText").textContent = health.nemo_agent?.enabled
-      ? `${health.nemo_agent.model} · NeMo`
-      : "Deterministic fallback";
-    $("#telegramRuntime").classList.remove("error");
-    $("#telegramRuntime").classList.toggle("warning", !health.telegram_configured);
-    $("#telegramRuntimeText").textContent = !health.telegram_configured
-      ? "Not configured"
-      : `${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"} configured`;
+    state.runtime.samEnabled = Boolean(health.sam?.enabled);
+    state.runtime.samReady = Boolean(health.sam?.ready);
+    state.runtime.samDetail = String(health.sam?.detail || "");
+    const visionEnabled = Boolean(health.vision?.enabled);
+    const visionReachable = Boolean(health.vision?.reachable);
+    const visionModelAvailable = health.vision?.model_available !== false;
+    const nemoEnabled = Boolean(health.nemo_agent?.enabled);
+    const nemoReachable = Boolean(health.nemo_agent?.reachable);
+    const telegramConfigured = Boolean(health.telegram_configured);
+    $("#systemText").textContent = visionEnabled
+      ? `${health.vision.model} · local stack`
+      : `${health.detector} · local stack`;
+    if (!visionEnabled) {
+      setRuntimeNode("#visionRuntime", "Detector only", health.detector);
+    } else if (!visionReachable) {
+      setRuntimeNode("#visionRuntime", "Vision offline", compactDetail(health.vision?.detail), "warning");
+    } else if (!visionModelAvailable) {
+      setRuntimeNode("#visionRuntime", "Vision mismatch", compactDetail(health.vision?.detail), "warning");
+    } else {
+      setRuntimeNode("#visionRuntime", "Vision online", health.vision.model);
+    }
+    if (!nemoEnabled) {
+      setRuntimeNode("#agentRuntime", "NeMo disabled", "Deterministic fallback");
+    } else if (!nemoReachable) {
+      setRuntimeNode("#agentRuntime", "NeMo offline", "Using local fallback until the NeMo server is up", "warning");
+    } else {
+      setRuntimeNode("#agentRuntime", "NeMo online", health.nemo_agent.model);
+    }
+    if (!telegramConfigured) {
+      setRuntimeNode("#telegramRuntime", "Alerting optional", "Telegram not configured", "warning");
+    } else {
+      setRuntimeNode(
+        "#telegramRuntime",
+        "Alerting ready",
+        `${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"} configured`,
+      );
+    }
     $("#detectorName").textContent = health.detector === "yolo"
-      ? "Ultralytics YOLO"
+      ? health.sam?.enabled ? "Ultralytics YOLO + SAM 2" : "Ultralytics YOLO"
       : health.detector === "grounding_dino"
         ? "Grounding DINO"
         : health.vision?.enabled ? `${health.vision.model} · multimodal vision` : "Demo spatial detector";
     $("#detectorStatus").textContent = health.detector === "yolo"
-      ? "Pretrained YOLO is the active first-stage detector. The saved fire-exit clearance polygon remains the source of truth."
+      ? health.sam?.enabled
+        ? `Pretrained YOLO remains the first-stage detector. ${health.sam.provider.toUpperCase()} ${health.sam.model_size} refines zone candidates with box-prompted segmentation when enabled.`
+        : "Pretrained YOLO is the active first-stage detector. The saved fire-exit clearance polygon remains the source of truth."
       : health.detector === "grounding_dino"
         ? "Open-vocabulary NVIDIA-ready detector selected. It loads on first analysis."
         : health.vision?.enabled
           ? `${health.vision.model} reasons about uploaded images; the spatial detector evaluates drawn fire-exit clearance zones.`
           : "Zero-download test provider. Switch DETECTOR_PROVIDER for GPU inference.";
     $("#llmName").textContent = health.nemo_agent?.enabled
-      ? `${health.llm.model} · NeMo agent`
+      ? health.nemo_agent?.reachable
+        ? `${health.llm.model} · NeMo agent`
+        : "NeMo unavailable"
       : health.llm.enabled ? health.llm.model : "Deterministic fallback";
     $("#llmStatus").textContent = health.nemo_agent?.enabled
-      ? `Local Ollama reasoning orchestrated by the ${health.nemo_agent.model} NeMo workflow.`
+      ? health.nemo_agent?.reachable
+        ? `Local OpenAI-compatible reasoning orchestrated by the ${health.nemo_agent.model} NeMo workflow.`
+        : `The NeMo workflow is offline, so the app is using the local SOP fallback path. Start ./scripts/run-nemo-agent.sh after both vLLM servers are available. Detail: ${health.nemo_agent?.detail || "unknown"}.`
       : health.llm.enabled
         ? `OpenAI-compatible local endpoint: ${health.llm.base_url}`
-        : "Enable a local Ollama, vLLM, or NVIDIA NIM endpoint in .env when ready.";
+        : "Enable a local vLLM or other OpenAI-compatible endpoint in .env when ready.";
     $("#telegramName").textContent = health.telegram_configured
       ? `Telegram configured · ${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"}`
       : "Telegram not configured";
@@ -224,6 +510,9 @@ async function loadHealth() {
     $("#telegramTest").disabled = !health.telegram_configured;
   } catch (error) {
     $("#systemText").textContent = "API unavailable";
+    setRuntimeNode("#visionRuntime", "Health unavailable", "Could not load runtime status", "warning");
+    setRuntimeNode("#agentRuntime", "Health unavailable", "Could not load runtime status", "warning");
+    setRuntimeNode("#telegramRuntime", "Health unavailable", "Could not load runtime status", "warning");
     toast(error.message, "error");
   }
 }
@@ -278,7 +567,7 @@ function renderIncidents() {
         : `<span class="evidence-thumb"></span>`}
       <div class="incident-main"><strong>${escapeHtml(incident.zone)}</strong><small>${escapeHtml(incident.id)}</small></div>
       <div class="incident-data"><strong>${escapeHtml(incident.object_type)}</strong><small>${Math.round(incident.confidence * 100)}% confidence</small></div>
-      <div class="incident-data"><strong>${Math.round(incident.overlap * 100)}% overlap</strong><small>${incident.duration_seconds.toFixed(1)}s persistent</small></div>
+      <div class="incident-data"><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong><small>${escapeHtml(segmentationMethodLabel(incident.spatial_method || (incident.incident_metadata || {}).spatial_method))} · ${incident.duration_seconds.toFixed(1)}s</small></div>
       <div class="incident-data"><strong>${formatDate(incident.created_at)}</strong><small>${escapeHtml(incident.facility)}</small></div>
       <span class="badge ${incident.status}">${incident.status.replace("_", " ")}</span>
     </div>
@@ -289,6 +578,17 @@ function renderIncidents() {
 async function openIncident(id) {
   try {
     const incident = await api(`/api/incidents/${id}`);
+    const metadata = incident.incident_metadata || {};
+    const spatialMethod = incident.spatial_method || metadata.spatial_method || "yolo_box_fallback";
+    const samPolygon = incident.sam_polygon || metadata.sam_polygon || [];
+    const zoneMode = metadata.zone_mode || "polygon";
+    const vehicleIdentifier = incident.vehicle_identifier || metadata.vehicle_identifier || "";
+    const vehicleIdentifierType = incident.vehicle_identifier_type || metadata.vehicle_identifier_type || "";
+    const segmentationNote = samPolygon.length
+      ? `${samPolygon.length} polygon points · ${incident.sam_model || metadata.sam_model || "SAM"}`
+      : metadata.segmentation_fallback_reason
+        ? `Fallback reason: ${metadata.segmentation_fallback_reason}`
+        : "No segmentation metadata stored for this incident.";
     $("#drawerContent").innerHTML = `
       ${incident.evidence_image ? `<img class="drawer-image" src="/${incident.evidence_image}" alt="Incident evidence">` : ""}
       <div class="drawer-body">
@@ -301,10 +601,20 @@ async function openIncident(id) {
           <div><span>Detected</span><strong>${escapeHtml(incident.object_type)}</strong></div>
           <div><span>Confidence</span><strong>${Math.round(incident.confidence * 100)}%</strong></div>
           <div><span>Incident time</span><strong>${escapeHtml(formatDateTime(incident.created_at))}</strong></div>
-          <div><span>Zone intrusion</span><strong>${Math.round(incident.overlap * 100)}%</strong></div>
-          <div><span>Zone blockage</span><strong>${Math.round(((incident.incident_metadata || {}).exit_blockage_ratio || 0) * 100)}%</strong></div>
-          <div><span>Track ID</span><strong>${escapeHtml(String((incident.incident_metadata || {}).track_id ?? "n/a"))}</strong></div>
+          <div><span>Zone intrusion</span><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong></div>
+          <div><span>Zone blockage</span><strong>${formatPercent(incident.exit_blockage_ratio ?? metadata.exit_blockage_ratio)}</strong></div>
+          <div><span>Zone basis</span><strong>${escapeHtml(zoneModeLabel(zoneMode))}</strong></div>
+          <div><span>Spatial method</span><strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong></div>
+          <div><span>Vehicle ID</span><strong>${escapeHtml(vehicleIdentifier ? `${vehicleIdentifier}${vehicleIdentifierType && vehicleIdentifierType !== "none" ? ` (${vehicleIdentifierType.replaceAll("_", " ")})` : ""}` : "n/a")}</strong></div>
+          <div><span>Track ID</span><strong>${escapeHtml(String(metadata.track_id ?? "n/a"))}</strong></div>
+          <div><span>SAM inference</span><strong>${incident.sam_inference_ms != null ? `${Math.round(incident.sam_inference_ms)} ms` : "n/a"}</strong></div>
+          <div><span>SAM score</span><strong>${incident.sam_score != null ? formatPercent(incident.sam_score) : "n/a"}</strong></div>
           <div><span>Notification</span><strong>${escapeHtml(notificationLabel(incident.telegram_status))}</strong></div>
+        </div>
+        <div class="sop-box">
+          <span>Segmentation detail</span>
+          <strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong>
+          <p>${escapeHtml(segmentationNote)}</p>
         </div>
         <div class="sop-box">
           <span>Grounded recommendation · ${escapeHtml(incident.sop_title)}</span>
@@ -386,15 +696,20 @@ function drawCanvas() {
 
 function updateZoneStatus() {
   const ready = state.polygon.length >= 3;
+  const samActive = state.runtime.samEnabled && state.runtime.samReady;
   $("#zoneStatus").classList.toggle("ready", ready);
   $("#zoneStatus").innerHTML = ready
-    ? `<span>◆</span><div><strong>Fire-exit clearance zone active</strong><small>${state.polygon.length} points · intrusion and blockage rules apply</small></div>`
+    ? `<span>◆</span><div><strong>Clearance zone active</strong><small>${state.polygon.length} points · deterministic rules in effect</small></div>`
     : state.mediaMode === "image"
-      ? `<span>✦</span><div><strong>YOLO detection + local vision reasoning</strong><small>No polygon: YOLO runs first, then the local vision model evaluates those detections</small></div>`
-      : `<span>◇</span><div><strong>No fire-exit clearance zone drawn</strong><small>Video monitoring requires at least three points</small></div>`;
+      ? samActive
+        ? `<span>✦</span><div><strong>Full-frame analysis</strong><small>YOLO prompts SAM on relevant detections across the whole image</small></div>`
+        : `<span>✦</span><div><strong>Full-frame fallback</strong><small>SAM is not ready${state.runtime.samDetail ? `: ${escapeHtml(state.runtime.samDetail)}` : ""}. YOLO box overlap stays active.</small></div>`
+      : `<span>◇</span><div><strong>Zone required for video</strong><small>Draw at least three points to run video monitoring</small></div>`;
   $("#analyseLabel").textContent = ready
     ? (state.mediaMode === "image" ? "Analyse clearance zone" : "Analyse video")
-    : "Run YOLO + vision";
+    : state.mediaMode === "image"
+      ? "Analyse full frame"
+      : "Run video analysis";
   $("#analyseButton").disabled = !(state.file && (ready || state.mediaMode === "image"));
 }
 
@@ -426,68 +741,19 @@ canvas.addEventListener("click", event => {
 
 async function runAnalysis() {
   if (!state.file || !state.selectedCamera) return;
-  const useSceneReasoning = state.mediaMode === "image" && state.polygon.length < 3;
+  const useFullFrame = state.mediaMode === "image" && state.polygon.length < 3;
   const button = $("#analyseButton");
   button.disabled = true;
-  $("#analyseLabel").textContent = useSceneReasoning ? "Starting YOLO…" : (state.mediaMode === "image" ? "Analysing…" : "Uploading…");
-  const form = new FormData();
-  form.append("file", state.file);
-  form.append("camera_id", state.selectedCamera.id);
-  if (useSceneReasoning) {
-    const buildSceneForm = () => {
-      const sceneForm = new FormData();
-      sceneForm.append("file", state.file);
-      sceneForm.append("camera_id", state.selectedCamera.id);
-      return sceneForm;
-    };
-    try {
-      renderSceneProgress({
-        eyebrow: "YOLO local detector",
-        title: "Running first-stage detection",
-        message: "Scanning the uploaded image locally for supported objects.",
-        detections: [],
-        phase: "detect",
-      });
-      $("#analyseLabel").textContent = "Running YOLO…";
-      const preview = await api("/api/analyse/scene/detect", {
-        method: "POST",
-        body: buildSceneForm(),
-      });
-      renderSceneProgress({
-        eyebrow: `${preview.provider} detections ready`,
-        title: preview.count
-          ? `${preview.count} object${preview.count === 1 ? "" : "s"} identified`
-          : "No supported objects identified",
-        message: preview.scene_detections.length
-          ? `${sceneDetectionSummary(preview.scene_detections)} Sending grounded detections to the local vision model for further evaluation.`
-          : "YOLO did not identify any supported objects above the current threshold. Sending an empty detection list to the local vision model for further evaluation.",
-        detections: preview.scene_detections,
-        phase: "vision",
-      });
-      $("#analyseLabel").textContent = "Evaluating with vision…";
-      const sceneForm = buildSceneForm();
-      sceneForm.append("scene_detections", JSON.stringify(preview.scene_detections || []));
-      const result = await api("/api/analyse/scene", { method: "POST", body: sceneForm });
-      renderSceneResult(result);
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      button.disabled = false;
-      updateZoneStatus();
-    }
-    return;
-  }
+  $("#analyseLabel").textContent = state.mediaMode === "image" ? "Analysing…" : "Uploading…";
   const updatedCamera = {
     ...state.selectedCamera,
-    exit_zone: state.polygon,
+    exit_zone: useFullFrame ? cameraPolygon(state.selectedCamera) : state.polygon,
     blocked_classes: $("#classesInput").value.split(",").map(value => value.trim()).filter(Boolean),
     minimum_overlap: Number($("#overlapInput").value),
     persistence_seconds: Number($("#durationInput").value),
   };
   delete updatedCamera.id;
   delete updatedCamera.created_at;
-  form.append("camera_id", state.selectedCamera.id);
-  form.append("exit_zone", JSON.stringify(state.polygon));
   try {
     state.selectedCamera = await api(`/api/cameras/${state.selectedCamera.id}`, {
       method: "PUT",
@@ -497,10 +763,28 @@ async function runAnalysis() {
     const cameraIndex = state.cameras.findIndex(item => item.id === state.selectedCamera.id);
     if (cameraIndex >= 0) state.cameras[cameraIndex] = state.selectedCamera;
     if (state.mediaMode === "image") {
-      const result = await api("/api/analyse/image", { method: "POST", body: form });
+      $("#analyseLabel").textContent = "Running YOLO + SAM…";
+      const preview = await api("/api/analyse/image/preview", {
+        method: "POST",
+        body: buildImageAnalysisForm(useFullFrame),
+      });
+      renderAnalysisPreview(preview);
+      await flushUiFrame();
+      $("#analyseLabel").textContent = preview.will_validate_with_vision
+        ? "Validating with the multimodal model…"
+        : preview.blocking_candidates
+          ? "Finalizing incident…"
+          : "Completing analysis…";
+      const result = await api("/api/analyse/image", {
+        method: "POST",
+        body: buildImageAnalysisForm(useFullFrame, preview.preview_token || ""),
+      });
       renderAnalysisResult(result);
     } else {
-      const job = await api("/api/analyse/video", { method: "POST", body: form });
+      const job = await api("/api/analyse/video", {
+        method: "POST",
+        body: buildImageAnalysisForm(false),
+      });
       renderJob(job);
       pollJob(job.id);
     }
@@ -549,40 +833,27 @@ function renderSceneResult(result) {
       <div class="result-copy">
         <p class="eyebrow ${result.violation ? "" : "mint"}">${escapeHtml(result.provider || "detector")} · YOLO grounding · ${escapeHtml(result.model)} vision</p>
         <h3>${result.violation ? `${escapeHtml(result.category)} issue detected` : "No visible violation detected"}</h3>
-        ${sceneWorkflowMarkup("complete")}
-        <section class="scene-section scene-section-hero">
-          <span class="section-tag">Assessment</span>
-          <p class="scene-lead">${escapeHtml(result.summary)}</p>
-          <div class="scene-metric-grid">
-            <div class="scene-metric">
-              <span>Confidence</span>
-              <strong>${Math.round(result.confidence * 100)}%</strong>
-            </div>
-            <div class="scene-metric">
-              <span>Pipeline</span>
-              <strong>YOLO -> Local vision</strong>
-            </div>
-            ${result.incident_created_at ? `
-              <div class="scene-metric">
-                <span>Incident time</span>
-                <strong>${escapeHtml(formatDateTime(result.incident_created_at))}</strong>
-              </div>
-            ` : ""}
+        <div class="scene-metric-grid">
+          <div class="scene-metric">
+            <span>Confidence</span>
+            <strong>${Math.round(result.confidence * 100)}%</strong>
           </div>
-        </section>
-        <section class="scene-section">
-          <span class="section-tag">YOLO detections</span>
-          <p class="scene-section-copy">${escapeHtml(yoloSummary)}</p>
-          ${sceneDetectionListMarkup(result.scene_detections || [])}
-        </section>
-        <section class="scene-section">
-          <span class="section-tag">Visible evidence</span>
-          ${evidence}
-        </section>
-        <section class="scene-section">
-          <span class="section-tag">Other visible objects</span>
-          ${objects}
-        </section>
+          <div class="scene-metric">
+            <span>Pipeline</span>
+            <strong>YOLO -> Local vision</strong>
+          </div>
+          ${result.incident_created_at ? `
+            <div class="scene-metric">
+              <span>Incident time</span>
+              <strong>${escapeHtml(formatDateTime(result.incident_created_at))}</strong>
+            </div>
+          ` : ""}
+        </div>
+        <p class="result-summary-copy">${escapeHtml(result.summary)}</p>
+        ${detailCard("Workflow details", sceneWorkflowMarkup("complete"), true)}
+        ${detailCard("YOLO detections", `<p class="scene-section-copy">${escapeHtml(yoloSummary)}</p>${sceneDetectionListMarkup(result.scene_detections || [])}`)}
+        ${detailCard("Visible evidence", evidence)}
+        ${detailCard("Other visible objects", objects)}
         ${result.recommended_action ? `
           <section class="scene-section scene-section-action">
             <span class="section-tag">Recommended first action</span>
@@ -601,18 +872,52 @@ function renderSceneResult(result) {
 
 function renderAnalysisResult(result) {
   const blocked = result.detections.filter(item => item.is_blocking);
+  const primary = blocked[0] || result.detections[0] || null;
+  const spatialMethod = primary ? segmentationMethodLabel(primary.spatial_method) : "None";
+  const fullFrame = String(result.zone_mode || "").toLowerCase() === "full_frame";
   $("#analysisResult").innerHTML = `
-    <article class="panel result-card">
+    <article class="panel result-card scene-result-card">
       <img src="${result.annotated_image}?t=${Date.now()}" alt="Annotated analysis result">
       <div class="result-copy">
-        <p class="eyebrow ${blocked.length ? "" : "mint"}">${escapeHtml(result.provider)} analysis</p>
-        <h3>${blocked.length ? `${blocked.length} obstruction${blocked.length > 1 ? "s" : ""} detected` : "Fire-exit clearance zone is clear"}</h3>
-        <p>${blocked.length
-          ? `The spatial rule created ${result.incidents.length} incident record(s). Open the incident queue to review the SOP-grounded response.`
-          : "Objects may have been detected, but none met the configured class, intrusion, and blockage rules."}</p>
-        <div class="detection-chips">${result.detections.length
-          ? result.detections.map(item => `<span class="chip ${item.is_blocking ? "blocking" : ""}">${escapeHtml(item.label)} · ${Math.round(item.confidence * 100)}% · ${Math.round(item.object_intrusion_ratio * 100)}% in zone · ${Math.round(item.exit_blockage_ratio * 100)}% zone</span>`).join("")
-          : `<span class="chip">No objects detected</span>`}</div>
+        <p class="eyebrow ${blocked.length ? "" : "mint"}">${escapeHtml(result.provider)} ${fullFrame ? "full-frame workflow" : "fire-exit workflow"}</p>
+        <h3>${blocked.length
+          ? `${blocked.length} obstruction${blocked.length > 1 ? "s" : ""} detected`
+          : fullFrame
+            ? "No blocking object met the full-frame thresholds"
+            : "Fire-exit clearance zone is clear"}</h3>
+        <div class="scene-metric-grid">
+          <div class="scene-metric">
+            <span>Zone basis</span>
+            <strong>${escapeHtml(zoneModeLabel(result.zone_mode))}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Primary method</span>
+            <strong>${escapeHtml(spatialMethod)}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Detections</span>
+            <strong>${result.detections.length}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Incidents</span>
+            <strong>${result.incidents.length}</strong>
+          </div>
+          <div class="scene-metric">
+            <span>Notification</span>
+            <strong>${escapeHtml(notificationLabel(result.telegram_status || ""))}</strong>
+          </div>
+        </div>
+        <p class="result-summary-copy">${blocked.length
+          ? `The deterministic workflow created ${result.incidents.length} incident record(s) and stored the annotated evidence image.`
+          : "Objects may have been detected, but none met the configured class, intrusion, blockage, and persistence rules."}</p>
+        ${detailCard("Workflow details", fireExitWorkflowMarkup(result, blocked), true)}
+        ${detailCard(
+          "Detection details",
+          `<p class="scene-section-copy">${fullFrame
+            ? "The evidence image shows the full-frame border, YOLO box, and SAM contour where segmentation succeeded."
+            : "The evidence image shows the fire-exit polygon, YOLO box, and SAM contour where segmentation succeeded."}</p>${fireExitDetectionListMarkup(result.detections)}`
+        )}
+        ${detailCard("Overlay legend", analysisLegendMarkup(fullFrame))}
         ${result.incidents.length ? `<button class="button bright" data-open-result="${result.incidents[0]}">Review incident</button>` : ""}
       </div>
     </article>`;
@@ -712,6 +1017,11 @@ function wireEvents() {
   $("#cameraSelect").addEventListener("change", event => {
     state.selectedCamera = state.cameras.find(camera => camera.id === event.target.value);
     populateCameraControls(state.selectedCamera);
+    if (state.image && state.mediaMode === "video") {
+      state.polygon = cameraPolygon(state.selectedCamera);
+      drawCanvas();
+    }
+    if (state.image) renderSceneReady();
   });
   $("#mediaInput").addEventListener("change", event => {
     const file = event.target.files[0];
@@ -734,7 +1044,7 @@ function wireEvents() {
           const image = new Image();
           image.onload = () => {
             state.image = image;
-            state.polygon = state.selectedCamera?.exit_zone || [];
+            state.polygon = cameraPolygon(state.selectedCamera);
             canvas.style.display = "block";
             $("#stagePlaceholder").style.display = "none";
             $("#drawHint").style.display = "block";
@@ -777,8 +1087,11 @@ function setMediaMode(mode) {
   $("#mediaInput").accept = mode === "image" ? "image/*" : "video/*";
   $("#analyseLabel").textContent = mode === "image" ? "Analyse image" : "Analyse video";
   if (mode === "video" && state.selectedCamera?.exit_zone?.length >= 3) {
-    state.polygon = state.selectedCamera.exit_zone;
+    state.polygon = cameraPolygon(state.selectedCamera);
+  } else if (mode === "image") {
+    state.polygon = [];
   }
+  if (state.image) drawCanvas();
   updateZoneStatus();
 }
 

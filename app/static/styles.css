@@ -81,24 +81,25 @@ p { line-height: 1.6; }
 .status-dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 10px var(--green); }
 .runtime-strip {
   min-height: 72px; margin: -12px 0 24px; padding: 13px 16px; display: grid;
-  grid-template-columns: minmax(170px,1fr) auto 24px auto 24px auto; align-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch;
   gap: 12px; border: 1px solid var(--line); border-radius: 14px;
   background: linear-gradient(100deg, rgba(12,25,20,.96), rgba(17,35,28,.72));
   box-shadow: 0 12px 35px rgba(0,0,0,.16);
 }
-.runtime-label { display: grid; gap: 3px; }
-.runtime-label strong { font-size: 13px; font-weight: 600; }
 .runtime-kicker, .runtime-node small {
   color: #61766b; font-size: 8px; font-weight: 800; letter-spacing: .15em;
 }
-.runtime-node { display: flex; align-items: center; gap: 10px; min-width: 150px; }
+.runtime-node {
+  display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 14px 15px;
+  border: 1px solid rgba(255,255,255,.05); border-radius: 12px; background: rgba(7,16,13,.45);
+}
 .runtime-node div { display: grid; gap: 3px; }
-.runtime-node strong { color: #c9d8d0; font-size: 11px; font-weight: 600; }
+.runtime-node strong { color: #c9d8d0; font-size: 12px; font-weight: 600; }
+.runtime-node em { color: var(--muted); font-size: 10px; font-style: normal; line-height: 1.45; }
 .runtime-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px rgba(47,216,127,.09); }
 .runtime-node.warning .runtime-dot { background: var(--amber); box-shadow: 0 0 0 5px rgba(255,199,107,.09); }
 .runtime-node.error .runtime-dot { background: var(--danger); box-shadow: 0 0 0 5px rgba(255,109,104,.09); }
 .runtime-node.error strong { color: #ffaaa6; }
-.runtime-arrow { color: #42574c; font-size: 14px; }
 .button {
   appearance: none; border: 1px solid transparent; border-radius: 10px; padding: 11px 16px;
   color: var(--text); background: transparent; font-weight: 600; font-size: 13px; cursor: pointer;
@@ -182,14 +183,14 @@ p { line-height: 1.6; }
 .stage-tools { padding: 15px 22px 22px; }
 .file-button input { display: none; }
 .control-panel { padding-bottom: 20px; align-self: start; }
-.workflow-steps {
-  margin: -4px 20px 18px; padding: 12px; display: flex; align-items: center;
-  justify-content: space-between; border: 1px solid var(--line); border-radius: 10px;
-  background: rgba(7,16,13,.52);
+.setup-highlights {
+  margin: -4px 20px 18px; display: flex; flex-wrap: wrap; gap: 8px;
 }
-.workflow-steps span { display: flex; align-items: center; gap: 6px; color: #9bb0a5; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
-.workflow-steps b { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: rgba(140,240,189,.1); color: var(--mint); font-size: 8px; }
-.workflow-steps i { width: 18px; height: 1px; background: var(--line); }
+.setup-chip {
+  display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(7,16,13,.52);
+  color: #9bb0a5; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+}
 .field { position: relative; display: block; margin: 0 20px 15px; color: var(--muted); font-size: 11px; }
 .field span { display: block; margin-bottom: 8px; font-weight: 600; }
 .field input, .field select, .field textarea, select {
@@ -224,6 +225,7 @@ p { line-height: 1.6; }
 .result-copy h3 { font-size: 25px; }
 .result-copy p { color: var(--muted); font-size: 13px; }
 .scene-result-card .result-copy { display: grid; gap: 16px; align-content: start; }
+.result-summary-copy { margin: 0; color: #b6c7be; line-height: 1.65; }
 .analysis-steps { display: grid; gap: 10px; margin: 18px 0 22px; }
 .analysis-step {
   display: flex; align-items: center; gap: 12px; padding: 12px;
@@ -301,10 +303,99 @@ p { line-height: 1.6; }
   color: var(--text);
   font-size: 16px;
 }
+.detail-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,.025);
+  overflow: hidden;
+}
+.detail-card summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.detail-card summary::-webkit-details-marker { display: none; }
+.detail-card summary::after {
+  content: "+";
+  color: var(--mint);
+  font-size: 16px;
+  line-height: 1;
+}
+.detail-card[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.detail-card[open] summary::after {
+  content: "-";
+}
+.detail-body {
+  padding: 0 16px 16px;
+}
+.detail-body .analysis-steps {
+  margin-top: 14px;
+  margin-bottom: 0;
+}
+.detail-body .detection-chips,
+.detail-body .detection-detail-list,
+.detail-body .scene-detection-list {
+  margin-top: 12px;
+}
 .scene-detection-list {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+.detection-detail-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.detection-detail-row {
+  padding: 13px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px;
+  background: rgba(7,16,13,.46);
+}
+.detection-detail-row.blocking {
+  border-color: rgba(255,109,104,.22);
+  background: rgba(59, 22, 20, .38);
+}
+.detection-detail-main {
+  display: grid;
+  gap: 5px;
+}
+.detection-detail-main strong {
+  color: var(--text);
+  font-size: 13px;
+  text-transform: capitalize;
+}
+.detection-detail-main small {
+  color: #a8bbb1;
+  font-size: 10px;
+}
+.detection-detail-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 11px;
+}
+.detection-detail-metrics span {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+  color: #d3e1da;
+  font-size: 10px;
+}
+.detection-detail-copy {
+  margin: 10px 0 0;
+  color: #a8bbb1;
+  font-size: 12px;
+  line-height: 1.55;
 }
 .scene-detection-row {
   display: flex;
@@ -426,7 +517,6 @@ dialog .field-row .field:last-child { margin-left: 7px; }
   .topbar { min-height: 82px; margin-bottom: 18px; }
   .system-pill { display: none; }
   .runtime-strip { grid-template-columns: 1fr; gap: 10px; margin-top: 0; }
-  .runtime-label, .runtime-arrow { display: none; }
   .runtime-node { min-width: 0; }
   .hero { padding: 32px 25px; min-height: 370px; }
   .hero-trust { display: grid; gap: 7px; }
@@ -440,6 +530,7 @@ dialog .field-row .field:last-child { margin-left: 7px; }
   .result-card { grid-template-columns: 1fr; }
   .scene-result-card { grid-template-columns: 1fr; }
   .scene-metric-grid { grid-template-columns: 1fr; }
+  .detection-detail-metrics { display: grid; }
   .env-panel { display: block; }
   .env-panel .button { margin-top: 15px; }
 }
