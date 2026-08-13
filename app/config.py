@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     detector_provider: str = "demo"
     device: str = "auto"
+    cv_shared_gpu_safe_mode: bool = True
     yolo_model_path: str = "yolo11n.pt"
     yolo_confidence_threshold: float = 0.35
     yolo_image_size: int = 640

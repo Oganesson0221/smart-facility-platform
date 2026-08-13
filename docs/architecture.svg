@@ -1,0 +1,233 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title description">
+  <title id="title">Smart Facility Platform architecture</title>
+  <desc id="description">A layered architecture diagram showing browser, camera, and Telegram inputs; the FastAPI application; the ordered YOLO, SAM, deterministic geometry, and Nemotron validation pipeline; NeMo Agent Toolkit orchestration; and incident storage, SOP, evidence, and notification outputs.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08110e"/>
+      <stop offset="1" stop-color="#0d1814"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#13231d"/>
+      <stop offset="1" stop-color="#0e1b16"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.24"/>
+    </filter>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#84ddb0"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76baf4"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffc76b"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff7772"/>
+    </marker>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      .title { fill: #eef7f2; font-size: 34px; font-weight: 750; letter-spacing: -0.7px; }
+      .subtitle { fill: #8fa69a; font-size: 15px; }
+      .layer-label { fill: #6f897b; font-size: 10px; font-weight: 750; letter-spacing: 1.8px; }
+      .card-title { fill: #eef7f2; font-size: 15px; font-weight: 700; }
+      .card-copy { fill: #93a89d; font-size: 11px; }
+      .step { fill: #84ddb0; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+      .port { fill: #7b9186; font-size: 10px; font-weight: 650; }
+      .small { fill: #7c9488; font-size: 10px; }
+      .green-line { stroke: #84ddb0; stroke-width: 2.2; fill: none; marker-end: url(#arrowGreen); }
+      .blue-line { stroke: #76baf4; stroke-width: 1.9; fill: none; marker-end: url(#arrowBlue); }
+      .amber-line { stroke: #ffc76b; stroke-width: 2; fill: none; marker-end: url(#arrowAmber); }
+      .red-line { stroke: #ff7772; stroke-width: 2; fill: none; marker-end: url(#arrowRed); }
+      .dashed { stroke-dasharray: 7 7; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1040" rx="28" fill="url(#background)"/>
+  <circle cx="1440" cy="20" r="310" fill="#2c9963" opacity="0.055"/>
+  <circle cx="140" cy="1010" r="260" fill="#386b55" opacity="0.06"/>
+
+  <text x="52" y="58" class="title">Smart Facility Platform</text>
+  <text x="52" y="86" class="subtitle">Local, auditable fire-exit monitoring with NeMo-orchestrated vision and deterministic incident policy</text>
+  <g transform="translate(1180 47)">
+    <rect width="112" height="28" rx="14" fill="#132920" stroke="#295c45"/>
+    <circle cx="17" cy="14" r="4" fill="#54d294"/>
+    <text x="29" y="18" class="small" fill="#a8d7bd">LOCAL AI</text>
+    <rect x="124" width="142" height="28" rx="14" fill="#13202b" stroke="#294a62"/>
+    <circle cx="141" cy="14" r="4" fill="#76baf4"/>
+    <text x="153" y="18" class="small" fill="#a8cae8">NVIDIA NEMO</text>
+    <rect x="278" width="116" height="28" rx="14" fill="#282116" stroke="#5d4824"/>
+    <circle cx="295" cy="14" r="4" fill="#ffc76b"/>
+    <text x="307" y="18" class="small" fill="#e2c58e">HUMAN REVIEW</text>
+  </g>
+
+  <text x="52" y="142" class="layer-label">INPUTS &amp; OPERATORS</text>
+  <g filter="url(#shadow)">
+    <rect x="52" y="160" width="220" height="100" rx="14" fill="url(#panel)" stroke="#263d33"/>
+    <circle cx="80" cy="190" r="12" fill="#183a2c"/>
+    <path d="M74 190h12M80 184v12" stroke="#84ddb0" stroke-width="1.8"/>
+    <text x="104" y="192" class="card-title">Camera / media</text>
+    <text x="76" y="221" class="card-copy">Images, video, RTSP metadata</text>
+    <text x="76" y="240" class="card-copy">Optional clearance polygon</text>
+
+    <rect x="52" y="282" width="220" height="100" rx="14" fill="url(#panel)" stroke="#263d33"/>
+    <rect x="69" y="301" width="23" height="18" rx="3" fill="none" stroke="#84ddb0" stroke-width="1.6"/>
+    <path d="M74 325h13" stroke="#84ddb0" stroke-width="1.6"/>
+    <text x="104" y="314" class="card-title">Browser dashboard</text>
+    <text x="76" y="343" class="card-copy">Configure, analyse, review</text>
+    <text x="76" y="362" class="card-copy">Acknowledge or mark false alarm</text>
+
+    <rect x="52" y="404" width="220" height="100" rx="14" fill="url(#panel)" stroke="#263d33"/>
+    <path d="M69 429l24-10-6 25-7-7-5 5-2-9z" fill="none" stroke="#76baf4" stroke-width="1.6" stroke-linejoin="round"/>
+    <text x="104" y="436" class="card-title">Telegram</text>
+    <text x="76" y="465" class="card-copy">Alerts, evidence, actions</text>
+    <text x="76" y="484" class="card-copy">Incident and SOP questions</text>
+  </g>
+
+  <text x="310" y="142" class="layer-label">ORDERED INCIDENT DECISION PIPELINE</text>
+  <rect x="300" y="160" width="1248" height="222" rx="20" fill="#0d1814" stroke="#21382d"/>
+  <g filter="url(#shadow)">
+    <rect x="326" y="207" width="164" height="116" rx="14" fill="#172820" stroke="#315845"/>
+    <text x="346" y="234" class="step">ENTRY</text>
+    <text x="346" y="261" class="card-title">FastAPI</text>
+    <text x="346" y="282" class="card-copy">Upload, camera policy</text>
+    <text x="346" y="300" class="port">HTTP :8000</text>
+
+    <rect x="526" y="207" width="164" height="116" rx="14" fill="#12231d" stroke="#315845"/>
+    <text x="546" y="234" class="step">1 · DETECT</text>
+    <text x="546" y="261" class="card-title">YOLO 11</text>
+    <text x="546" y="282" class="card-copy">Labels, confidence, boxes</text>
+    <text x="546" y="300" class="port">NAT detector tool</text>
+
+    <rect x="726" y="207" width="164" height="116" rx="14" fill="#12231d" stroke="#315845"/>
+    <text x="746" y="234" class="step">2 · REFINE</text>
+    <text x="746" y="261" class="card-title">SAM 2.1</text>
+    <text x="746" y="282" class="card-copy">Box-prompted object mask</text>
+    <text x="746" y="300" class="port">NAT segmenter tool</text>
+
+    <rect x="926" y="207" width="174" height="116" rx="14" fill="#1c241b" stroke="#5c5931"/>
+    <text x="946" y="234" class="step" fill="#ffc76b">3 · MEASURE</text>
+    <text x="946" y="261" class="card-title">ROI + IoU rules</text>
+    <text x="946" y="282" class="card-copy">Intrusion and exit blockage</text>
+    <text x="946" y="300" class="port">Shapely + OpenCV</text>
+
+    <rect x="1136" y="207" width="184" height="116" rx="14" fill="#12202a" stroke="#34536b"/>
+    <text x="1156" y="234" class="step" fill="#76baf4">4 · VALIDATE</text>
+    <text x="1156" y="261" class="card-title">Nemotron vision</text>
+    <text x="1156" y="282" class="card-copy">Visible exit context</text>
+    <text x="1156" y="300" class="port">vLLM :8002</text>
+  </g>
+
+  <path d="M490 265H518" class="green-line"/>
+  <path d="M690 265H718" class="green-line"/>
+  <path d="M890 265H918" class="green-line"/>
+  <path d="M1100 265H1128" class="green-line"/>
+  <path d="M1320 265H1373" class="amber-line"/>
+
+  <g filter="url(#shadow)">
+    <path d="M1422 216 L1471 265 L1422 314 L1373 265 Z" fill="#282116" stroke="#8c6b32"/>
+    <text x="1422" y="259" text-anchor="middle" class="card-title" font-size="13">Incident?</text>
+    <text x="1422" y="278" text-anchor="middle" class="small">confirmed</text>
+  </g>
+
+  <path d="M272 210H318" class="green-line"/>
+  <path d="M272 332H300V284H318" class="green-line"/>
+  <path d="M272 454H288V304H318" class="blue-line dashed"/>
+
+  <text x="310" y="430" class="layer-label">NEMO ORCHESTRATION &amp; MODEL SERVICES</text>
+  <rect x="300" y="448" width="830" height="208" rx="20" fill="#0d171d" stroke="#284254"/>
+  <g filter="url(#shadow)">
+    <rect x="328" y="500" width="218" height="108" rx="14" fill="#142634" stroke="#385d76"/>
+    <text x="348" y="527" class="step" fill="#76baf4">AGENT FRAMEWORK</text>
+    <text x="348" y="554" class="card-title">NeMo Agent Toolkit</text>
+    <text x="348" y="575" class="card-copy">smart-facility-agent</text>
+    <text x="348" y="593" class="port">OpenAI API :8010</text>
+
+    <rect x="578" y="500" width="226" height="108" rx="14" fill="#142634" stroke="#385d76"/>
+    <text x="598" y="527" class="step" fill="#76baf4">CONTROL MODEL</text>
+    <text x="598" y="554" class="card-title">Qwen 2.5 7B</text>
+    <text x="598" y="575" class="card-copy">Tool selection + open-ended chat</text>
+    <text x="598" y="593" class="port">text vLLM :8001</text>
+
+    <rect x="836" y="500" width="266" height="108" rx="14" fill="#142634" stroke="#385d76"/>
+    <text x="856" y="527" class="step" fill="#76baf4">PLUGIN TOOLS</text>
+    <text x="856" y="554" class="card-title">Smart Facility tool set</text>
+    <text x="856" y="575" class="card-copy">YOLO · SAM · vision · SOP</text>
+    <text x="856" y="593" class="port">Validated JSON results</text>
+  </g>
+  <path d="M578 554H554" class="blue-line"/>
+  <path d="M546 582H828" class="blue-line"/>
+  <path d="M437 500V342H608V331" class="blue-line dashed"/>
+  <path d="M970 500V410H808V331" class="blue-line dashed"/>
+  <path d="M1015 500V410H1228V331" class="blue-line dashed"/>
+  <text x="446" y="474" class="small">requests tools</text>
+  <text x="892" y="636" class="small">NAT owns orchestration; FastAPI owns incident policy</text>
+
+  <text x="310" y="704" class="layer-label">AUDITABLE DATA &amp; RESPONSE</text>
+  <rect x="300" y="722" width="830" height="230" rx="20" fill="#101a16" stroke="#263c32"/>
+  <g filter="url(#shadow)">
+    <rect x="328" y="774" width="224" height="120" rx="14" fill="url(#panel)" stroke="#2d493b"/>
+    <text x="348" y="801" class="step">INCIDENT STATE</text>
+    <text x="348" y="828" class="card-title">SQLite</text>
+    <text x="348" y="850" class="card-copy">Cameras, incidents, jobs</text>
+    <text x="348" y="869" class="card-copy">Subscribers and status</text>
+
+    <rect x="578" y="774" width="224" height="120" rx="14" fill="url(#panel)" stroke="#2d493b"/>
+    <text x="598" y="801" class="step">EVIDENCE</text>
+    <text x="598" y="828" class="card-title">Local files</text>
+    <text x="598" y="850" class="card-copy">Uploads, annotated frames</text>
+    <text x="598" y="869" class="card-copy">Masks and validation images</text>
+
+    <rect x="828" y="774" width="274" height="120" rx="14" fill="url(#panel)" stroke="#2d493b"/>
+    <text x="848" y="801" class="step">GROUNDED RESPONSE</text>
+    <text x="848" y="828" class="card-title">Local Markdown SOPs</text>
+    <text x="848" y="850" class="card-copy">First action and escalation policy</text>
+    <text x="848" y="869" class="card-copy">No invented procedures</text>
+  </g>
+
+  <text x="1170" y="430" class="layer-label">DECISION OUTCOMES</text>
+  <rect x="1160" y="448" width="388" height="504" rx="20" fill="#121915" stroke="#393d2c"/>
+  <g filter="url(#shadow)">
+    <rect x="1190" y="486" width="328" height="104" rx="14" fill="#251817" stroke="#663633"/>
+    <text x="1210" y="513" class="step" fill="#ff7772">NOT CONFIRMED</text>
+    <text x="1210" y="540" class="card-title">Explain the rejection</text>
+    <text x="1210" y="561" class="card-copy">Return Nemotron summary + evidence</text>
+    <text x="1210" y="579" class="port">No incident · no Telegram alert</text>
+
+    <rect x="1190" y="630" width="328" height="116" rx="14" fill="#17261f" stroke="#3d684f"/>
+    <text x="1210" y="657" class="step">CONFIRMED</text>
+    <text x="1210" y="684" class="card-title">Incident coordinator</text>
+    <text x="1210" y="705" class="card-copy">Persist evidence + retrieve SOP</text>
+    <text x="1210" y="724" class="port">Broadcast incident event</text>
+
+    <rect x="1190" y="786" width="328" height="126" rx="14" fill="#14232b" stroke="#345a6f"/>
+    <text x="1210" y="813" class="step" fill="#76baf4">NOTIFY &amp; REVIEW</text>
+    <text x="1210" y="840" class="card-title">Telegram + WebSocket</text>
+    <text x="1210" y="861" class="card-copy">Annotated alert and incident actions</text>
+    <text x="1210" y="880" class="card-copy">Live dashboard queue update</text>
+    <text x="1210" y="899" class="port">Human remains in the loop</text>
+  </g>
+
+  <path d="M1422 314V448H1354V478" class="red-line"/>
+  <text x="1438" y="407" class="small" fill="#d99390">NO</text>
+  <path d="M1471 265H1560V613H1518" class="green-line"/>
+  <text x="1528" y="592" class="small" fill="#9bd7b8">YES</text>
+  <path d="M1190 688H1140V834H1110" class="green-line"/>
+  <path d="M1354 746V778" class="blue-line"/>
+  <path d="M1190 688H1138V833H560" stroke="#84ddb0" stroke-width="1.8" fill="none" marker-end="url(#arrowGreen)"/>
+  <path d="M1190 706H1152V853H810" stroke="#84ddb0" stroke-width="1.8" fill="none" marker-end="url(#arrowGreen)"/>
+  <path d="M1190 724H1164V873H1110" stroke="#84ddb0" stroke-width="1.8" fill="none" marker-end="url(#arrowGreen)"/>
+
+  <path d="M1190 849H1148V982H168V512" class="blue-line dashed"/>
+  <path d="M1190 870H1130V995H184V390" class="blue-line dashed"/>
+
+  <g transform="translate(52 990)">
+    <line x1="0" y1="0" x2="30" y2="0" stroke="#84ddb0" stroke-width="2"/>
+    <text x="40" y="4" class="small">ordered data flow</text>
+    <line x1="185" y1="0" x2="215" y2="0" stroke="#76baf4" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="225" y="4" class="small">agent control / live event</text>
+    <circle cx="424" cy="0" r="5" fill="#ffc76b"/>
+    <text x="438" y="4" class="small">deterministic policy boundary</text>
+    <text x="1500" y="4" text-anchor="end" class="small">All model endpoints run locally; Telegram is the optional external boundary.</text>
+  </g>
+</svg>

@@ -39,8 +39,15 @@ fi
 
 host="${LLM_VLLM_HOST:-0.0.0.0}"
 port="${LLM_VLLM_PORT:-8001}"
-served_model_name="${LLM_MODEL:-google/gemma-4-12B-it}"
-model_source="${LLM_MODEL_SOURCE:-$served_model_name}"
+served_model_name="${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+default_local_source="$(pwd)/models/${served_model_name}"
+if [[ -n "${LLM_MODEL_SOURCE:-}" ]]; then
+  model_source="$LLM_MODEL_SOURCE"
+elif [[ -f "$default_local_source/config.json" ]]; then
+  model_source="$default_local_source"
+else
+  model_source="$served_model_name"
+fi
 max_model_len="${LLM_MAX_MODEL_LEN:-8192}"
 gpu_memory_utilization="${LLM_GPU_MEMORY_UTILIZATION:-0.35}"
 chat_template="${LLM_CHAT_TEMPLATE:-${GEMMA4_CHAT_TEMPLATE:-}}"

@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# shellcheck disable=SC1091
+source ./scripts/load-dotenv.sh
+load_dotenv_file .env
+
 find_uv() {
   local candidate
   for candidate in \
@@ -51,4 +55,7 @@ export SOP_DIRECTORY="${SOP_DIRECTORY:-$(pwd)/sops}"
 export NAT_CONFIG_DIR="${NAT_CONFIG_DIR:-$(pwd)/.nat-config}"
 export PYTHONPATH="$(pwd)${PYTHONPATH:+:${PYTHONPATH}}"
 exec .nemo-venv/bin/dotenv -f .env run -- \
-  .nemo-venv/bin/nat serve --config_file nemo_agent/config.yml
+  .nemo-venv/bin/nat serve \
+    --config_file nemo_agent/config.yml \
+    --host "${NEMO_AGENT_HOST:-0.0.0.0}" \
+    --port "${NEMO_AGENT_PORT:-8010}"

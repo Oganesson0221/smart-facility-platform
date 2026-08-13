@@ -311,9 +311,11 @@ def _build_fire_exit_validation_prompt(object_label: str | None = None) -> str:
     label = str(object_label or "unknown object").strip() or "unknown object"
     include_vehicle_identifier = label.lower() in _VEHICLE_IDENTIFIER_LABELS
     base = (
-        "Inspect this cropped facility candidate image. "
+        "Inspect this facility exit-clearance candidate image. "
         f"Primary YOLO object: {label}. "
-        "Decide only whether that visible object is blocking an emergency exit path or required fire-exit clearance area in the crop. "
+        "YOLO and SAM have already established that the object lies inside the configured exit-clearance zone; the whole image is that zone when no polygon was drawn. "
+        "Decide whether the named object is visibly present and occupies or could obstruct the emergency-exit path or required clearance area. "
+        "Reject only when the object is absent, visibly misclassified, or clearly unrelated to exit clearance. "
         "Use only visible evidence. If uncertain, set confirmed to false. "
         "Return JSON only. Keep summary short and visible_evidence to at most 3 items."
     )

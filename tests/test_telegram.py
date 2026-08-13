@@ -17,12 +17,59 @@ from app.config import Settings
 from app.database import Base
 from app.models import Incident, TelegramSubscriber
 from app.services.telegram import (
+    _PROCESSED_MESSAGE_KEYS,
     _alert_caption,
+    answer_telegram_message,
     handle_incoming_message,
     register_subscriber,
     send_incident_alert,
     subscriber_chat_ids,
 )
+
+
+def make_conversation_incident() -> Incident:
+    return Incident(
+        id="INC-20260813-084254-726",
+        camera_id="cam-1",
+        facility="Building A",
+        zone="South Access Zone",
+        event_type="fire_exit_obstruction",
+        object_type="car",
+        confidence=0.9021,
+        overlap=1.0,
+        duration_seconds=0.0,
+        status="open",
+        severity="high",
+        first_seen=datetime(2026, 8, 13, 8, 42, 44, tzinfo=timezone.utc),
+        last_seen=datetime(2026, 8, 13, 8, 42, 44, tzinfo=timezone.utc),
+        summary="A car is blocking the protected exit area.",
+        recommended_action="Notify Facilities Security.",
+        incident_metadata={
+            "spatial_method": "sam_mask",
+            "object_intrusion_ratio": 1.0,
+            "exit_blockage_ratio": 0.32,
+            "mask_zone_iou": 0.32,
+            "mask_area_pixels": 505236,
+            "blocked_duration_seconds": 0.0,
+            "yolo_box": [470, 388, 1448, 1079],
+            "yolo_class": "car",
+            "yolo_confidence": 0.9021,
+            "sam_model": "sam2.1_hiera_tiny (cpu)",
+            "sam_score": 0.91,
+            "vehicle_identifier": "ABC 1234",
+            "vehicle_identifier_type": "license_plate",
+            "vehicle_identifier_confidence": 0.99,
+            "zone_mode": "full_frame",
+            "vision_validation": {
+                "confirmed": True,
+                "confidence": 0.98,
+                "summary": "The car visibly occupies the protected exit area.",
+                "visible_evidence": ["A car is visible inside the exit frame."],
+            },
+        },
+        created_at=datetime(2026, 8, 13, 8, 42, 54, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 8, 13, 8, 42, 54, tzinfo=timezone.utc),
+    )
 
 
 class TelegramTests(unittest.TestCase):
@@ -362,6 +409,132 @@ class TelegramTests(unittest.TestCase):
         )
         self.assertEqual(settings.user_id, "7001")
 
+    def _conversation_db(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+        db.add(make_conversation_incident())
+        db.commit()
+        return db
+
+    def test_thanks_gets_short_acknowledgement_without_repeating_sop(self):
+        db = self._conversation_db()
+        try:
+            with patch(
+                "app.services.telegram.answer_sop_question",
+                AsyncMock(side_effect=AssertionError("LLM should not be called")),
+            ):
+                reply = asyncio.run(answer_telegram_message(db, "thanks"))
+            self.assertIn("You're welcome", reply)
+            self.assertIn("currently open", reply)
+            self.assertNotIn("1. Confirm", reply)
+            self.assertNotIn("Notify Facilities Security with", reply)
+        finally:
+            db.close()
+
+    def test_vehicle_number_question_uses_stored_vision_evidence(self):
+        db = self._conversation_db()
+        try:
+            with patch(
+                "app.services.telegram.answer_sop_question",
+                AsyncMock(side_effect=AssertionError("LLM should not be called")),
+            ):
+                reply = asyncio.run(
+                    answer_telegram_message(db, "What is the vehicle number?")
+                )
+            self.assertIn("ABC 1234", reply)
+            self.assertIn("license plate", reply)
+            self.assertIn("99%", reply)
+            self.assertIn("verify it against the saved image", reply)
+        finally:
+            db.close()
+
+    def test_sop_question_returns_one_grounded_vehicle_response(self):
+        db = self._conversation_db()
+        try:
+            with patch(
+                "app.services.telegram.answer_sop_question",
+                AsyncMock(side_effect=AssertionError("LLM should not be called")),
+            ):
+                reply = asyncio.run(answer_telegram_message(db, "what does sop say"))
+            self.assertEqual(reply.count("Vehicle Blocking an Emergency Exit SOP"), 1)
+            self.assertIn("Recorded visible vehicle identifier: ABC 1234", reply)
+            self.assertIn("1. Record only vehicle details visible", reply)
+            self.assertIn("5. If unresolved after 5 minutes", reply)
+            self.assertNotIn("Next steps:", reply)
+        finally:
+            db.close()
+
+    def test_overlap_and_confidence_questions_use_incident_metrics(self):
+        db = self._conversation_db()
+        try:
+            overlap = asyncio.run(
+                answer_telegram_message(db, "How much of the exit is blocked?")
+            )
+            confidence = asyncio.run(
+                answer_telegram_message(db, "How confident is the detection?")
+            )
+            self.assertIn("100% of the detected object", overlap)
+            self.assertIn("32% of the exit area", overlap)
+            self.assertIn("SAM mask", overlap)
+            self.assertIn("YOLO confidence", confidence)
+            self.assertIn("90%", confidence)
+            self.assertIn("confirmed at 98% confidence", confidence)
+        finally:
+            db.close()
+
+    def test_incident_details_are_concise_and_include_obstruction_evidence(self):
+        db = self._conversation_db()
+        try:
+            reply = asyncio.run(answer_telegram_message(db, "tell me more"))
+            self.assertIn("ABC 1234", reply)
+            self.assertIn("Object inside zone: 100%", reply)
+            self.assertIn("Exit area blocked: 32%", reply)
+            self.assertIn("Nemotron review: confirmed at 98% confidence", reply)
+            self.assertIn("snapshot (not timed)", reply)
+        finally:
+            db.close()
+
+    def test_unknown_explicit_incident_does_not_fall_back_to_latest(self):
+        db = self._conversation_db()
+        try:
+            reply = asyncio.run(
+                answer_telegram_message(
+                    db,
+                    "What happened in INC-20260101-000000-999?",
+                )
+            )
+            self.assertIn("could not find incident INC-20260101-000000-999", reply)
+            self.assertNotIn("INC-20260813-084254-726", reply)
+        finally:
+            db.close()
+
+    def test_duplicate_telegram_message_id_is_not_answered_twice(self):
+        db = self._conversation_db()
+        _PROCESSED_MESSAGE_KEYS.clear()
+        message = {
+            "message_id": 991,
+            "chat": {"id": 7001},
+            "from": {"username": "facilities_user", "first_name": "Pat"},
+            "text": "What is the vehicle number?",
+        }
+        try:
+            first_reply, _ = asyncio.run(handle_incoming_message(db, message))
+            second_reply, _ = asyncio.run(handle_incoming_message(db, message))
+            self.assertIn("ABC 1234", first_reply)
+            self.assertEqual(second_reply, "")
+        finally:
+            _PROCESSED_MESSAGE_KEYS.clear()
+            db.close()
+
+    def test_alert_caption_adds_location_identifier_confidence_and_vision_review(self):
+        incident = make_conversation_incident()
+        caption = _alert_caption(incident)
+        self.assertIn("Location: Building A — South Access Zone", caption)
+        self.assertIn("ABC 1234 (license plate) — 99% read confidence", caption)
+        self.assertIn("Nemotron review: confirmed at 98% confidence", caption)
+        self.assertIn("Blocked duration: snapshot (not timed)", caption)
+
     def test_start_command_returns_interactive_help(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
@@ -399,7 +572,7 @@ class TelegramTests(unittest.TestCase):
                         {
                             "chat": {"id": 7001},
                             "from": {"username": "facilities_user", "first_name": "Pat"},
-                            "text": "What should I do next for the latest incident?",
+                            "text": "Explain the operational concern for the latest incident.",
                         },
                     )
                 )
@@ -450,7 +623,7 @@ class TelegramTests(unittest.TestCase):
                         {
                             "chat": {"id": 7001},
                             "from": {"username": "facilities_user", "first_name": "Pat"},
-                            "text": "What should I do next for the latest incident?",
+                            "text": "Explain the operational concern for the latest incident.",
                         },
                     )
                 )

@@ -40,7 +40,7 @@ if [[ "${ALLOW_HF_OFFLINE:-false}" != "true" ]]; then
   unset HF_DATASETS_OFFLINE
 fi
 
-llm_model="${LLM_MODEL:-google/gemma-4-12B-it}"
+llm_model="${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
 vision_model="${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}"
 
 echo "Downloading $llm_model into $cache_dir/$llm_model"

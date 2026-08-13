@@ -1,34 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07130f">
+  <meta name="theme-color" content="#f4f7fa" id="themeColor">
   <title>Smart Facility Platform</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=enterprise-v4">
 </head>
 <body>
-  <div class="ambient ambient-one"></div>
-  <div class="ambient ambient-two"></div>
   <div class="shell">
     <aside class="sidebar">
       <a class="brand" href="#" aria-label="Smart Facility Platform dashboard">
         <span class="brand-mark"><span></span></span>
-        <span><strong>Smart Facility</strong><small>Platform · AI operations</small></span>
+        <span><strong>Smart Facility</strong><small>Dell edge · NVIDIA AI</small></span>
       </a>
       <nav>
-        <button class="nav-item active" data-view="overview">
-          <span class="nav-icon">⌂</span><span>Overview</span>
+        <button class="nav-item active" data-view="overview" aria-current="page">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 10.5 12 3l8.5 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-5v-6h-4v6H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg></span><span>Overview</span>
         </button>
         <button class="nav-item" data-view="analyse">
-          <span class="nav-icon">⌗</span><span>Visual inspection</span>
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3.5"/></svg></span><span>Visual inspection</span>
         </button>
         <button class="nav-item" data-view="cameras">
-          <span class="nav-icon">◉</span><span>Cameras</span>
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="14" height="12" rx="2"/><path d="m17 10 4-2v8l-4-2z"/><circle cx="10" cy="12" r="2.5"/></svg></span><span>Cameras</span>
         </button>
         <button class="nav-item" data-view="settings">
-          <span class="nav-icon">⚙</span><span>Platform</span>
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.95 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.58 15 1.7 1.7 0 0 0 3 14H3v-4h.08A1.7 1.7 0 0 0 4.6 8.95a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.58 1.7 1.7 0 0 0 10 3h4v.08A1.7 1.7 0 0 0 15.05 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.42 9 1.7 1.7 0 0 0 21 10v4h-.08A1.7 1.7 0 0 0 19.4 15z"/></svg></span><span>Platform</span>
         </button>
       </nav>
       <div class="side-foot">
@@ -36,7 +34,7 @@
           <span class="pulse"></span>
           <div><strong>Human in the loop</strong><small>Advisory actions only</small></div>
         </div>
-        <span class="version">LOCAL AI · NVIDIA NEMO</span>
+        <span class="version">DELL INFRASTRUCTURE · NVIDIA AI</span>
       </div>
     </aside>
 
@@ -48,80 +46,71 @@
         </div>
         <div class="header-actions">
           <div class="system-pill"><span class="status-dot"></span><span id="systemText">Checking system</span></div>
-          <button class="button primary compact" data-go="analyse">Run check <span>↗</span></button>
+          <button class="button primary compact" data-go="analyse">Run check</button>
         </div>
       </header>
 
-      <section class="runtime-strip" aria-label="Runtime status">
-        <div class="runtime-node" id="visionRuntime">
-          <span class="runtime-dot"></span>
-          <div><small>VISION</small><strong id="visionRuntimeText">Checking model</strong><em id="visionRuntimeHint">Waiting for health data</em></div>
-        </div>
-        <div class="runtime-node" id="agentRuntime">
-          <span class="runtime-dot"></span>
-          <div><small>AGENT</small><strong id="agentRuntimeText">Checking NeMo</strong><em id="agentRuntimeHint">Waiting for health data</em></div>
-        </div>
-        <div class="runtime-node" id="telegramRuntime">
-          <span class="runtime-dot"></span>
-          <div><small>ALERTING</small><strong id="telegramRuntimeText">Checking Telegram</strong><em id="telegramRuntimeHint">Waiting for health data</em></div>
-        </div>
-      </section>
+      <details class="runtime-disclosure">
+        <summary>
+          <span class="runtime-summary-icon"><span class="status-dot"></span></span>
+          <span class="runtime-summary-copy"><strong>Runtime services</strong><small id="runtimeSummaryText">Checking three services</small></span>
+          <span class="runtime-summary-action">View status</span>
+        </summary>
+        <section class="runtime-strip" aria-label="Runtime status">
+          <div class="runtime-node" id="visionRuntime">
+            <span class="runtime-dot"></span>
+            <div><small>VISION</small><strong id="visionRuntimeText">Checking model</strong><em id="visionRuntimeHint">Waiting for health data</em></div>
+          </div>
+          <div class="runtime-node" id="agentRuntime">
+            <span class="runtime-dot"></span>
+            <div><small>AGENT</small><strong id="agentRuntimeText">Checking NeMo</strong><em id="agentRuntimeHint">Waiting for health data</em></div>
+          </div>
+          <div class="runtime-node" id="telegramRuntime">
+            <span class="runtime-dot"></span>
+            <div><small>ALERTING</small><strong id="telegramRuntimeText">Checking Telegram</strong><em id="telegramRuntimeHint">Waiting for health data</em></div>
+          </div>
+        </section>
+      </details>
 
       <section class="view active" id="view-overview">
         <div class="hero">
-          <div>
-            <p class="eyebrow mint">Smart Facility Platform</p>
-            <h2>See risk. Act before<br>it escalates.</h2>
-            <p>Local YOLO, SAM, multimodal reasoning, and NeMo orchestration keep fire-exit decisions traceable on this host.</p>
+          <div class="hero-copy-block">
+            <p class="eyebrow mint">Dell edge infrastructure · NVIDIA AI</p>
+            <h2>Monitor exits.<br>Review what matters.</h2>
+            <p>Detect obstructions, verify the evidence, and coordinate the next action from one local workspace.</p>
             <div class="hero-actions">
-              <button class="button bright" data-go="analyse">Start visual analysis</button>
-              <button class="button ghost" id="refreshOverview">Refresh operations</button>
+              <button class="button bright" data-go="analyse">New inspection</button>
+              <button class="button ghost" id="refreshOverview">Refresh</button>
             </div>
             <div class="hero-trust">
-              <span>● Local models</span>
-              <span>● NeMo tools</span>
-              <span>● Stored evidence</span>
-            </div>
-          </div>
-          <div class="hero-visual">
-            <div class="scan-card">
-              <div class="scan-head"><span>South Access Camera</span><span class="live-badge">DEMO READY</span></div>
-              <div class="scan-scene">
-                <img src="/api/demo/frame" alt="Synthetic monitored access scene">
-                <div class="roi-box"><span>FIRE-EXIT CLEARANCE ZONE</span></div>
-                <div class="object-box"><span>vehicle · obstruction risk</span></div>
-                <div class="scan-line"></div>
-              </div>
-              <div class="scan-meta"><span>Spatial rules enabled</span><strong>NVIDIA-ready CV</strong></div>
+              <span>Local inference</span>
+              <span>Traceable evidence</span>
+              <span>Human review</span>
             </div>
           </div>
         </div>
 
         <div class="metric-grid">
           <article class="metric">
-            <div class="metric-icon danger">!</div>
             <div><span>Open incidents</span><strong id="statOpen">0</strong></div>
             <small>Needs review</small>
           </article>
           <article class="metric">
-            <div class="metric-icon amber">✓</div>
             <div><span>Acknowledged</span><strong id="statAck">0</strong></div>
             <small>Response underway</small>
           </article>
           <article class="metric">
-            <div class="metric-icon green">◉</div>
             <div><span>Configured cameras</span><strong id="statCameras">0</strong></div>
             <small>ROI protected</small>
           </article>
           <article class="metric">
-            <div class="metric-icon slate">◎</div>
             <div><span>False alarms</span><strong id="statFalse">0</strong></div>
             <small>Use for tuning</small>
           </article>
         </div>
 
         <div class="section-head">
-          <div><p class="eyebrow">Incident queue</p><h3>Recent detections</h3></div>
+          <div><p class="eyebrow">Incident queue</p><h3>Recent detections</h3><p class="section-description">Select an incident to review its evidence and response.</p></div>
           <div class="filters">
             <button class="filter active" data-status="">All</button>
             <button class="filter" data-status="open">Open</button>
@@ -146,7 +135,7 @@
             <div class="camera-stage" id="cameraStage">
               <canvas id="roiCanvas" width="1100" height="720"></canvas>
               <div class="stage-placeholder" id="stagePlaceholder">
-                <span class="upload-glyph">↥</span>
+                <span class="stage-kicker">Media input</span>
                 <strong>Drop an image or video</strong>
                 <small>or load the synthetic demo to test now</small>
               </div>
@@ -160,19 +149,26 @@
           </article>
 
           <aside class="panel control-panel">
-            <div class="panel-head"><div><p class="eyebrow">Analysis policy</p><h3>Inspection setup</h3></div></div>
+            <div class="panel-head"><div><p class="eyebrow">Analysis policy</p><h3>Inspection setup</h3><p class="panel-description">Choose a camera and run the standard safety workflow.</p></div></div>
             <div class="setup-highlights" aria-label="Analysis workflow">
-              <span class="setup-chip">YOLO first</span>
-              <span class="setup-chip">SAM refine</span>
-              <span class="setup-chip">NeMo respond</span>
+              <span class="setup-chip"><b>1</b> YOLO</span>
+              <span class="setup-flow-arrow">→</span>
+              <span class="setup-chip"><b>2</b> SAM</span>
+              <span class="setup-flow-arrow">→</span>
+              <span class="setup-chip"><b>3</b> Nemotron</span>
             </div>
             <label class="field"><span>Camera</span><select id="cameraSelect"></select></label>
-            <div class="field-row">
-              <label class="field"><span>Min. overlap</span><input id="overlapInput" type="number" min="0" max="1" step=".05" value=".25"></label>
-              <label class="field"><span>Persistence</span><input id="durationInput" type="number" min="0" step="1" value="5"><i>seconds</i></label>
-            </div>
-            <label class="field"><span>Obstruction classes</span><textarea id="classesInput" rows="3">car, truck, bus, motorcycle, bicycle</textarea></label>
-            <div class="zone-status ready" id="zoneStatus"><span>✦</span><div><strong>YOLO + SAM full-frame analysis</strong><small>No polygon needed for images unless you want to restrict the zone</small></div></div>
+            <div class="zone-status ready" id="zoneStatus"><div><strong>YOLO + SAM full-frame analysis</strong><small>No polygon needed for images unless you want to restrict the zone</small></div></div>
+            <details class="setup-advanced">
+              <summary><span>Detection policy</span><small>Thresholds and object classes</small></summary>
+              <div class="setup-advanced-body">
+                <div class="field-row">
+                  <label class="field"><span>Min. overlap</span><input id="overlapInput" type="number" min="0" max="1" step=".05" value=".25"></label>
+                  <label class="field"><span>Persistence</span><input id="durationInput" type="number" min="0" step="1" value="5"><i>seconds</i></label>
+                </div>
+                <label class="field"><span>Obstruction classes</span><textarea id="classesInput" rows="3">car, truck, bus, motorcycle, bicycle</textarea></label>
+              </div>
+            </details>
             <button class="button bright full" id="analyseButton" disabled>
               <span id="analyseLabel">Analyse image</span><span>→</span>
             </button>
@@ -184,7 +180,7 @@
 
       <section class="view" id="view-cameras">
         <div class="section-head">
-          <div><p class="eyebrow">Configuration</p><h3>Fire-exit clearance zones</h3></div>
+          <div><p class="eyebrow">Configuration</p><h3>Fire-exit clearance zones</h3><p class="section-description">Manage camera locations and optional restricted zones.</p></div>
           <button class="button primary" id="newCameraButton">Add camera</button>
         </div>
         <div class="camera-grid" id="cameraGrid"></div>
@@ -193,24 +189,20 @@
       <section class="view" id="view-settings">
         <div class="settings-intro">
           <p class="eyebrow mint">Runtime</p>
-          <h2>Private intelligence.<br>Operational control.</h2>
+          <h2>Local AI services</h2>
           <p>Inference, evidence, and SOP retrieval stay local. NeMo coordinates the workflow when its runtime is online.</p>
         </div>
         <div class="settings-grid">
           <article class="setting-card">
-            <div class="setting-symbol nvidia">N</div>
             <div><span class="tag">COMPUTER VISION</span><h3 id="detectorName">Loading…</h3><p id="detectorStatus">Checking detector status.</p></div>
           </article>
           <article class="setting-card">
-            <div class="setting-symbol llm">✦</div>
             <div><span class="tag">LOCAL LLM</span><h3 id="llmName">Loading…</h3><p id="llmStatus">Checking local model configuration.</p></div>
           </article>
           <article class="setting-card">
-            <div class="setting-symbol telegram">↗</div>
             <div><span class="tag">NOTIFICATIONS</span><h3 id="telegramName">Loading…</h3><p id="telegramStatus">Message @SmartFacilityAssistant_bot with /start to receive annotated image alerts.</p><button class="text-button" id="telegramTest">Send test alert →</button></div>
           </article>
           <article class="setting-card">
-            <div class="setting-symbol sop">≡</div>
             <div><span class="tag">KNOWLEDGE</span><h3>Local SOP retrieval</h3><p>Recommendations are generated only from Markdown SOPs in the repository.</p></div>
           </article>
         </div>
@@ -247,6 +239,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=enterprise-v4"></script>
 </body>
 </html>

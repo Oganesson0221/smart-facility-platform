@@ -114,6 +114,223 @@ def deactivate_subscriber(db: Session, chat_id: str) -> bool:
 
 
 _INCIDENT_ID_PATTERN = re.compile(r"INC-\d{8}-\d{6}-\d{3}", re.IGNORECASE)
+_PROCESSED_MESSAGE_KEYS: dict[str, None] = {}
+_MESSAGE_CACHE_LIMIT = 512
+
+
+def _normalized_message_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+
+def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+    return any(phrase in text for phrase in phrases)
+
+
+def _format_percent(value: object) -> str:
+    try:
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _incident_time_text(value: datetime | None) -> str:
+    if not isinstance(value, datetime):
+        return "unknown time"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _vehicle_identifier_description(incident: Incident) -> str:
+    metadata = incident.incident_metadata or {}
+    identifier = str(metadata.get("vehicle_identifier") or "").strip()
+    identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    if not identifier:
+        return "No vehicle identifier was readable in the saved evidence."
+    confidence = metadata.get("vehicle_identifier_confidence")
+    confidence_text = (
+        f", read confidence {_format_percent(confidence)}"
+        if confidence is not None
+        else ""
+    )
+    type_text = _vehicle_identifier_suffix(identifier_type)
+    return (
+        f"The visible vehicle identifier for {incident.id} is {identifier}"
+        f"{type_text}{confidence_text}. Treat this as a vision-assisted evidence read "
+        "and verify it against the saved image before taking action."
+    )
+
+
+def _vision_validation_description(metadata: dict) -> str:
+    validation = metadata.get("vision_validation") or {}
+    if not isinstance(validation, dict):
+        return "not recorded"
+    mode = str(validation.get("mode") or "").strip().lower()
+    if mode == "disabled":
+        return "disabled"
+    if mode == "unavailable":
+        return "unavailable; deterministic CV decision used"
+    confirmed = validation.get("confirmed")
+    if confirmed is None:
+        return "not recorded"
+    confidence = validation.get("confidence")
+    suffix = f" at {_format_percent(confidence)} confidence" if confidence is not None else ""
+    return f"{'confirmed' if bool(confirmed) else 'rejected'}{suffix}"
+
+
+def _incident_detail_answer(incident: Incident) -> str:
+    metadata = incident.incident_metadata or {}
+    identifier = str(metadata.get("vehicle_identifier") or "").strip()
+    identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    vehicle_line = (
+        f"\nVehicle identifier: {identifier}{_vehicle_identifier_suffix(identifier_type)} "
+        f"— {_format_percent(metadata.get('vehicle_identifier_confidence'))} read confidence"
+        if identifier
+        else ""
+    )
+    duration = float(metadata.get("blocked_duration_seconds", incident.duration_seconds) or 0)
+    duration_text = f"{duration:.1f}s" if duration > 0 else "snapshot (not timed)"
+    return (
+        f"Incident {incident.id}\n"
+        f"Location: {incident.facility} — {incident.zone}\n"
+        f"Object: {incident.object_type} ({incident.confidence:.0%} YOLO confidence)"
+        f"{vehicle_line}\n"
+        f"Object inside zone: {_format_percent(metadata.get('object_intrusion_ratio', incident.overlap))}\n"
+        f"Exit area blocked: {_format_percent(metadata.get('exit_blockage_ratio'))}\n"
+        f"Segmentation: {'SAM mask' if metadata.get('spatial_method') == 'sam_mask' else 'YOLO box'}\n"
+        f"Nemotron review: {_vision_validation_description(metadata)}\n"
+        f"Duration: {duration_text}\n"
+        f"Status: {incident.status.replace('_', ' ')}"
+    )
+
+
+def _reference_section_steps(reference_text: str, title: str) -> list[str]:
+    match = re.search(
+        rf"^\[{re.escape(title)}\]\s*$\n(.*?)(?=^\[[^\]]+\]\s*$|\Z)",
+        reference_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        return []
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if re.match(r"^\d+\.\s+", line.strip())
+    ]
+
+
+def _sop_section_title(incident: Incident | None) -> str:
+    if incident is not None and incident.event_type == "parking_violation":
+        return "Restricted Parking and Access Zone"
+    if incident is not None and incident.object_type.lower() in {
+        "vehicle",
+        "car",
+        "truck",
+        "bus",
+        "van",
+        "motorcycle",
+    }:
+        return "Vehicle Blocking an Emergency Exit"
+    return "Fire Exit Obstruction"
+
+
+def _sop_answer(incident: Incident | None, reference_text: str) -> str:
+    title = _sop_section_title(incident)
+    steps = _reference_section_steps(reference_text, title)
+    if not steps:
+        return "The local SOP could not be loaded. Use /help or review the incident in the dashboard."
+    context = f" for incident {incident.id}" if incident is not None else ""
+    vehicle = ""
+    if incident is not None:
+        metadata = incident.incident_metadata or {}
+        identifier = str(metadata.get("vehicle_identifier") or "").strip()
+        if identifier:
+            vehicle = f"\nRecorded visible vehicle identifier: {identifier}."
+    return f"{title} SOP{context}:{vehicle}\n\n" + "\n".join(steps)
+
+
+def _answer_known_incident_question(
+    question: str,
+    incident: Incident,
+    reference_text: str,
+) -> str | None:
+    normalized = _normalized_message_text(question)
+    metadata = incident.incident_metadata or {}
+    identifier = str(metadata.get("vehicle_identifier") or "").strip()
+
+    vehicle_terms = ("vehicle", "car", "truck", "van", "plate", "registration")
+    identifier_query = _contains_any(
+        normalized,
+        ("number", "identifier", "plate", "registration"),
+    ) or bool(re.search(r"\bid\b", normalized))
+    if _contains_any(normalized, ("incident id", "incident number", "reference number")):
+        return f"The incident ID is {incident.id}."
+
+    if (
+        _contains_any(normalized, ("license plate", "licence plate", "number plate"))
+        or (
+            identifier_query
+            and (_contains_any(normalized, vehicle_terms) or (identifier and "incident" not in normalized))
+        )
+    ):
+        return _vehicle_identifier_description(incident)
+
+    if _contains_any(normalized, ("what does sop", "what is the sop", "sop say", "next step", "what should i do", "what do i do", "what to do")):
+        return _sop_answer(incident, reference_text)
+
+    if _contains_any(normalized, ("can i move", "can we move", "tow", "enter the vehicle")):
+        return (
+            f"No. For {incident.id}, the SOP says not to enter, tow, or move the vehicle "
+            "without authorisation. Notify Facilities Security to locate the authorised driver."
+        )
+
+    if _contains_any(normalized, ("who do i notify", "who should i notify", "who to notify", "contact")):
+        return f"Notify Facilities Security and give them incident ID {incident.id}."
+
+    if _contains_any(normalized, ("when do i escalate", "when should i escalate", "how long before", "escalat")):
+        return (
+            f"If {incident.id} remains unresolved after 5 minutes, escalate to the duty "
+            "facility manager. Record the acknowledgement and resolution time."
+        )
+
+    if _contains_any(normalized, ("where", "location", "which camera", "which exit")):
+        return f"{incident.id} is at {incident.facility} — {incident.zone}."
+
+    if _contains_any(normalized, ("status", "acknowledged", "closed", "false alarm")):
+        return f"Incident {incident.id} is currently {incident.status.replace('_', ' ')}."
+
+    if _contains_any(normalized, ("how much", "overlap", "inside the zone", "area blocked", "blockage", "iou")):
+        return (
+            f"For {incident.id}, {_format_percent(metadata.get('object_intrusion_ratio', incident.overlap))} "
+            f"of the detected object is inside the zone and it covers "
+            f"{_format_percent(metadata.get('exit_blockage_ratio'))} of the exit area. "
+            f"The spatial method was {'a SAM mask' if metadata.get('spatial_method') == 'sam_mask' else 'a YOLO box'}."
+        )
+
+    if _contains_any(normalized, ("confidence", "confident", "how sure", "certain", "accurate")):
+        return (
+            f"YOLO confidence for {incident.id} is {incident.confidence:.0%}. "
+            f"Nemotron review: {_vision_validation_description(metadata)}."
+        )
+
+    if _contains_any(normalized, ("when", "what time", "how long", "duration")):
+        duration = float(metadata.get("blocked_duration_seconds", incident.duration_seconds) or 0)
+        duration_text = f"{duration:.1f} seconds" if duration > 0 else "a single image snapshot, so no duration was measured"
+        return (
+            f"{incident.id} was first seen at {_incident_time_text(incident.first_seen)}. "
+            f"This incident came from {duration_text}."
+        )
+
+    if _contains_any(normalized, ("evidence", "photo", "image", "show me", "review")):
+        return (
+            f"Review the annotated evidence for {incident.id} here: "
+            f"{settings.public_base_url.rstrip('/')}/#incident={incident.id}"
+        )
+
+    if normalized in {"why", "what happened", "tell me more", "details", "incident details", "what is this"}:
+        return _incident_detail_answer(incident)
+
+    return None
 
 
 def _incident_context(incident: Incident | None) -> dict | None:
@@ -134,14 +351,23 @@ def _incident_context(incident: Incident | None) -> dict | None:
         "spatial_method": metadata.get("spatial_method"),
         "object_intrusion_ratio": metadata.get("object_intrusion_ratio"),
         "exit_blockage_ratio": metadata.get("exit_blockage_ratio"),
+        "blocked_duration_seconds": metadata.get(
+            "blocked_duration_seconds", incident.duration_seconds
+        ),
         "mask_zone_iou": metadata.get("mask_zone_iou"),
+        "mask_area_pixels": metadata.get("mask_area_pixels"),
         "sam_model": metadata.get("sam_model"),
+        "sam_score": metadata.get("sam_score"),
+        "sam_inference_ms": metadata.get("sam_inference_ms"),
         "yolo_box": metadata.get("yolo_box"),
         "yolo_class": metadata.get("yolo_class"),
         "yolo_confidence": metadata.get("yolo_confidence"),
         "vehicle_identifier": metadata.get("vehicle_identifier"),
         "vehicle_identifier_type": metadata.get("vehicle_identifier_type"),
         "vehicle_identifier_confidence": metadata.get("vehicle_identifier_confidence"),
+        "zone_mode": metadata.get("zone_mode"),
+        "vision_validation": metadata.get("vision_validation"),
+        "evidence_image": incident.evidence_image,
         "created_at": incident.created_at.astimezone(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         ),
@@ -188,7 +414,75 @@ async def answer_telegram_message(db: Session, text: str) -> str:
     if not question:
         return "Send a question, for example: What should I do next for the latest incident?"
 
+    normalized = _normalized_message_text(question)
+    if normalized in {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }:
+        return (
+            "Hello. I can help with the latest facility incident, vehicle details, "
+            "overlap measurements, status, evidence, or SOP next steps. What would you like to know?"
+        )
+
+    explicit_match = _INCIDENT_ID_PATTERN.search(question)
     incident = _resolve_incident_for_question(db, question)
+    if explicit_match is not None and incident is None:
+        return f"I could not find incident {explicit_match.group(0).upper()}. Check the ID and try again."
+
+    if normalized in {
+        "ok",
+        "okay",
+        "got it",
+        "understood",
+        "thanks",
+        "thank you",
+        "thank you very much",
+        "cheers",
+    }:
+        if incident is None:
+            return "You're welcome. Send /help whenever you need facility-safety assistance."
+        return (
+            f"You're welcome. Incident {incident.id} is currently "
+            f"{incident.status.replace('_', ' ')}. Ask me for its vehicle details, evidence, "
+            "status, overlap, or SOP steps at any time."
+        )
+
+    sop_reference_path, sop_reference_text = load_telegram_sop_reference()
+    if incident is not None:
+        known_answer = _answer_known_incident_question(
+            question,
+            incident,
+            sop_reference_text,
+        )
+        if known_answer is not None:
+            return known_answer
+
+    safety_terms = (
+        "incident",
+        "sop",
+        "exit",
+        "obstruction",
+        "vehicle",
+        "car",
+        "truck",
+        "parking",
+        "security",
+        "camera",
+        "zone",
+        "alert",
+        "safety",
+        "driver",
+    )
+    if explicit_match is None and not _contains_any(normalized, safety_terms):
+        return (
+            "I’m the Smart Facility safety assistant, so I can help with incidents, "
+            "vehicle details, evidence, status, and local SOP actions. Send /help for examples."
+        )
+
     incident_context = _incident_context(incident)
     if incident is not None:
         matched_sops = search_sops(
@@ -200,7 +494,6 @@ async def answer_telegram_message(db: Session, text: str) -> str:
     else:
         # Use a broad fire-exit obstruction default when there is no incident context.
         matched_sops = search_sops("fire_exit_obstruction", "all", "vehicle", limit=2)
-    sop_reference_path, sop_reference_text = load_telegram_sop_reference()
     reply = await answer_sop_question(
         question,
         incident_context,
@@ -208,44 +501,66 @@ async def answer_telegram_message(db: Session, text: str) -> str:
         sop_reference_text,
         matched_sops,
     )
-    return reply.strip()
+    cleaned = reply.strip()
+    if len(cleaned) > 1400:
+        cleaned = cleaned[:1399].rstrip() + "…"
+    return cleaned
 
 
 async def handle_incoming_message(db: Session, message: dict) -> tuple[str, bool]:
     chat_id = str((message.get("chat") or {}).get("id", ""))
+    message_id = str(message.get("message_id") or "").strip()
+    message_key = f"{chat_id}:{message_id}" if chat_id and message_id else ""
+    if message_key and message_key in _PROCESSED_MESSAGE_KEYS:
+        subscriber = db.get(TelegramSubscriber, chat_id)
+        return "", bool(subscriber and subscriber.active)
+
+    def finish(reply: str, subscribed: bool) -> tuple[str, bool]:
+        if message_key:
+            _PROCESSED_MESSAGE_KEYS[message_key] = None
+            while len(_PROCESSED_MESSAGE_KEYS) > _MESSAGE_CACHE_LIMIT:
+                _PROCESSED_MESSAGE_KEYS.pop(next(iter(_PROCESSED_MESSAGE_KEYS)))
+        return reply, subscribed
+
     raw_text = str(message.get("text") or "").strip()
     text = raw_text.lower()
     if text.startswith("/stop"):
         deactivate_subscriber(db, chat_id)
-        return (
+        return finish(
             "Smart Facility alerts are now disabled. Send /start to subscribe again.",
             False,
         )
     if text.startswith("/start"):
         register_subscriber(db, message)
-        return (
+        return finish(
             "You are subscribed to Smart Facility safety alerts. "
             "Annotated incident images will be sent here.\n\n"
             "You can also ask the bot questions like:\n"
             "- What should I do next for the latest incident?\n"
             "- What should I do next for INC-20260730-042724-593?\n"
+            "- What is the vehicle number in the latest incident?\n"
+            "- How much of the exit is blocked?\n"
             "- What does the fire exit obstruction SOP say?\n\n"
             "Send /stop to opt out.",
             True,
         )
     if text.startswith("/help"):
         register_subscriber(db, message)
-        return (
+        return finish(
             "Ask about the latest incident or a specific incident ID.\n"
             "Examples:\n"
             "- What should I do next for the latest incident?\n"
             "- What should I do next for INC-20260730-042724-593?\n"
+            "- What is the vehicle number?\n"
+            "- Where and when was it detected?\n"
+            "- How confident are YOLO and Nemotron?\n"
+            "- Show me the evidence.\n"
             "- What does the restricted parking SOP say?\n\n"
             "The bot answers from the local SOP reference file and incident data.",
             True,
         )
     register_subscriber(db, message)
-    return await answer_telegram_message(db, raw_text), True
+    return finish(await answer_telegram_message(db, raw_text), True)
 
 
 def _keyboard(incident_id: str) -> dict:
@@ -263,6 +578,13 @@ def _keyboard(incident_id: str) -> dict:
             ],
         ]
     }
+
+
+def _vehicle_identifier_suffix(identifier_type: str) -> str:
+    normalized = identifier_type.strip()
+    if not normalized or normalized == "none":
+        return ""
+    return f" ({normalized.replace('_', ' ')})"
 
 
 def _alert_text(incident) -> str:
@@ -284,6 +606,7 @@ def _alert_text(incident) -> str:
     intrusion = float(metadata.get("object_intrusion_ratio", getattr(incident, "overlap", 0)) or 0)
     blockage = float(metadata.get("exit_blockage_ratio", 0) or 0)
     duration = float(metadata.get("blocked_duration_seconds", getattr(incident, "duration_seconds", 0)) or 0)
+    duration_text = f"{duration:.1f}s" if duration > 0 else "snapshot (not timed)"
     method = str(metadata.get("spatial_method") or "yolo_box_fallback")
     method_label = "SAM mask" if method == "sam_mask" else "YOLO bounding box"
     first_action = (
@@ -293,9 +616,16 @@ def _alert_text(incident) -> str:
     )
     vehicle_identifier = str(metadata.get("vehicle_identifier") or "").strip()
     vehicle_identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    vehicle_identifier_confidence = metadata.get("vehicle_identifier_confidence")
+    vehicle_identifier_confidence_suffix = (
+        f" — {_format_percent(vehicle_identifier_confidence)} read confidence"
+        if vehicle_identifier_confidence is not None
+        else ""
+    )
     vehicle_identifier_line = (
         f"Vehicle identifier: {vehicle_identifier}"
-        f"{f' ({vehicle_identifier_type.replace('_', ' ')})' if vehicle_identifier_type and vehicle_identifier_type != 'none' else ''}\n"
+        f"{_vehicle_identifier_suffix(vehicle_identifier_type)}"
+        f"{vehicle_identifier_confidence_suffix}\n"
         if vehicle_identifier
         else ""
     )
@@ -308,8 +638,9 @@ def _alert_text(incident) -> str:
         f"YOLO confidence: {incident.confidence:.0%}\n"
         f"Object inside zone: {intrusion:.0%}\n"
         f"Exit area blocked: {blockage:.0%}\n"
-        f"Blocked duration: {duration:.1f}s\n"
+        f"Blocked duration: {duration_text}\n"
         f"Segmentation method: {method_label}\n"
+        f"Nemotron review: {_vision_validation_description(metadata)}\n"
         f"Violation: {incident.summary}\n"
         f"Incident: {incident.id}\n\n"
         f"Recommended first action: {first_action}\n\n"
@@ -324,20 +655,30 @@ def _alert_caption(incident, limit: int = 900) -> str:
     intrusion = float(metadata.get("object_intrusion_ratio", getattr(incident, "overlap", 0)) or 0)
     blockage = float(metadata.get("exit_blockage_ratio", 0) or 0)
     duration = float(metadata.get("blocked_duration_seconds", getattr(incident, "duration_seconds", 0)) or 0)
+    duration_text = f"{duration:.1f}s" if duration > 0 else "snapshot (not timed)"
     first_action = (
         str(getattr(incident, "recommended_action", "") or "").splitlines()[0].strip()
         or "Confirm the location and notify Facilities Security."
     )
     vehicle_identifier = str(metadata.get("vehicle_identifier") or "").strip()
     vehicle_identifier_type = str(metadata.get("vehicle_identifier_type") or "").strip()
+    vehicle_identifier_confidence = metadata.get("vehicle_identifier_confidence")
+    vehicle_identifier_confidence_suffix = (
+        f" — {_format_percent(vehicle_identifier_confidence)} read confidence"
+        if vehicle_identifier_confidence is not None
+        else ""
+    )
     lines = [
+        "🚨 FIRE EXIT OBSTRUCTION",
         f"Incident: {incident.id}",
+        f"Location: {incident.facility} — {incident.zone}",
         f"Object: {incident.object_type}",
         *(
             [
                 "Vehicle ID: "
                 f"{vehicle_identifier}"
-                f"{f' ({vehicle_identifier_type.replace('_', ' ')})' if vehicle_identifier_type and vehicle_identifier_type != 'none' else ''}"
+                f"{_vehicle_identifier_suffix(vehicle_identifier_type)}"
+                f"{vehicle_identifier_confidence_suffix}"
             ]
             if vehicle_identifier
             else []
@@ -345,8 +686,9 @@ def _alert_caption(incident, limit: int = 900) -> str:
         f"YOLO confidence: {incident.confidence:.0%}",
         f"Object inside zone: {intrusion:.0%}",
         f"Exit area blocked: {blockage:.0%}",
-        f"Blocked duration: {duration:.1f}s",
+        f"Blocked duration: {duration_text}",
         f"Segmentation: {method_label}",
+        f"Nemotron review: {_vision_validation_description(metadata)}",
         f"First action: {first_action}",
     ]
     caption = "\n".join(lines)
@@ -439,7 +781,7 @@ async def send_incident_alert(
 
 
 async def send_bot_message(chat_id: str, text: str) -> None:
-    if not is_configured():
+    if not is_configured() or not str(text or "").strip():
         return
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     try:

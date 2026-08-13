@@ -129,8 +129,8 @@ After YOLO, the local vision model evaluates whether the detected objects
 actually support a violation.
 
 Current repo default:
-- Vision model: `gemma3:27b`
-- Vision endpoint: local Ollama
+- Vision model: `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4`
+- Vision endpoint: local OpenAI-compatible vLLM on port `8002`
 
 The local vision model does not invent boxes in the current scene path.
 It must reason from:

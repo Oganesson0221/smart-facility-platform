@@ -1,0 +1,44 @@
+flowchart LR
+    MEDIA[Camera / image / video] --> API[FastAPI application :8000]
+    UI[Browser dashboard] <--> API
+    TG[Telegram bot] <--> API
+
+    subgraph PIPELINE[Ordered incident decision pipeline]
+        YOLO[1 · YOLO detection]
+        SAM[2 · SAM segmentation]
+        GEO[3 · ROI, intrusion and IoU]
+        VISION[4 · Nemotron validation]
+        GATE{Confirmed?}
+        YOLO --> SAM --> GEO --> VISION --> GATE
+    end
+
+    API --> YOLO
+    GATE -- Yes --> INCIDENT[Incident coordinator]
+    GATE -- No --> EXPLAIN[Return decision and evidence to UI]
+
+    subgraph AGENT[NVIDIA NeMo Agent Toolkit :8010]
+        NAT[smart-facility-agent]
+        QWEN[Qwen 2.5 control vLLM :8001]
+        TOOLS[Five Smart Facility NAT tools]
+        QWEN --> NAT --> TOOLS
+    end
+
+    TOOLS -. orchestrates .-> YOLO
+    TOOLS -. orchestrates .-> SAM
+    TOOLS -. orchestrates .-> VISION
+
+    YOLO --> YOLOMODEL[yolo11n.pt]
+    SAM --> SAMMODEL[SAM 2.1 tiny]
+    VISION --> NEMOTRON[Nemotron vision vLLM :8002]
+
+    INCIDENT --> DB[(SQLite)]
+    INCIDENT --> FILES[Annotated evidence and crops]
+    INCIDENT --> SOP[Local Markdown SOPs]
+    INCIDENT --> EVENTS[Telegram + WebSocket]
+    EVENTS --> UI
+    EVENTS --> TG
+
+    API -. configured fallback .-> YOLOMODEL
+    API -. configured fallback .-> SAMMODEL
+    API -. open-ended Telegram questions .-> QWEN
+

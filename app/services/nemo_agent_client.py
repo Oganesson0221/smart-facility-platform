@@ -13,6 +13,7 @@ from app.config import ROOT, settings
 from app.services.cv.types import Detection
 from app.services.openai_compat import chat_completions
 from app.services.openai_compat import chat_completions_sync
+from app.services.openai_compat import coerce_text_content
 from app.services.openai_compat import extract_chat_message_content
 
 
@@ -79,13 +80,19 @@ def _serialize_detections(detections: list[Detection] | None) -> list[dict[str, 
 def _parse_json_content(content: object) -> dict:
     if isinstance(content, dict):
         return content
-    raw = str(content).strip()
+    raw = coerce_text_content(content)
     raw = _JSON_SUFFIX.sub("", _JSON_PREFIX.sub("", raw)).strip()
     if not raw.startswith("{"):
         start, end = raw.find("{"), raw.rfind("}")
         if start >= 0 and end > start:
             raw = raw[start : end + 1]
-    result = json.loads(raw)
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        excerpt = " ".join(raw.split())[:240] or "<empty response>"
+        raise RuntimeError(
+            f"NeMo workflow returned non-JSON content: {excerpt}"
+        ) from exc
     if not isinstance(result, dict):
         raise ValueError("NeMo workflow did not return a JSON object")
     return result

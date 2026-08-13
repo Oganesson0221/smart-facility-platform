@@ -176,6 +176,15 @@ class Sam2Segmenter(Segmenter):
     def _resolve_device(self) -> str:
         requested = settings.sam_device.strip().lower()
         if requested == "auto":
+            if (
+                settings.cv_shared_gpu_safe_mode
+                and settings.llm_enabled
+                and settings.vision_enabled
+            ):
+                LOGGER.info(
+                    "SAM auto device resolved to CPU because both local vLLM servers are enabled"
+                )
+                return "cpu"
             return "cuda" if self.torch.cuda.is_available() else "cpu"
         if requested.startswith("cuda") and not self.torch.cuda.is_available():
             LOGGER.warning("SAM requested CUDA but no CUDA device is available; falling back to CPU")

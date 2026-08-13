@@ -17,7 +17,11 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models import AnalysisJob, Camera, Incident
 from app.services.cv.annotator import annotate, annotate_scene
-from app.services.cv.detector import convert_yolo_results, suppress_duplicate_detections
+from app.services.cv.detector import (
+    YoloDetector,
+    convert_yolo_results,
+    suppress_duplicate_detections,
+)
 from app.services.cv.segmenter import (
     Sam2Segmenter,
     box_centroid_point,
@@ -38,6 +42,9 @@ from app.services.cv.types import Detection, Obstruction, SegmentationResult
 from app.services.llm import llm_runtime_status
 from app.services.llm import _parse_result
 from app.services.llm import create_grounded_summary
+from app.services.llm import SYSTEM_PROMPT
+from app.services.llm import TELEGRAM_ASSISTANT_PROMPT
+from app.services.nemo_agent_client import _parse_json_content
 from app.services.processing import (
     _crop_validation_region,
     _evaluate_obstructions,
@@ -221,16 +228,22 @@ class RoiTests(unittest.TestCase):
         self.assertFalse(box_intersects_or_near_polygon((150, 150, 200, 200), polygon, 20))
         self.assertTrue(box_intersects_or_near_polygon((102, 20, 140, 70), polygon, 5))
 
-    def test_full_frame_validation_crop_stays_near_detection(self):
+    def test_full_frame_validation_preserves_complete_exit_context(self):
         image = np.zeros((200, 300, 3), dtype=np.uint8)
         polygon = [[0, 0], [299, 0], [299, 199], [0, 199]]
         crop = _crop_validation_region(image, polygon, (120, 70, 180, 140))
+        self.assertEqual(crop.shape, image.shape)
+
+    def test_drawn_zone_validation_stays_cropped_to_zone_and_detection(self):
+        image = np.zeros((400, 500, 3), dtype=np.uint8)
+        polygon = [[100, 80], [300, 80], [300, 280], [100, 280]]
+        crop = _crop_validation_region(image, polygon, (250, 220, 340, 330))
         self.assertLess(crop.shape[0], image.shape[0])
         self.assertLess(crop.shape[1], image.shape[1])
-        self.assertGreaterEqual(crop.shape[0], 70)
-        self.assertGreaterEqual(crop.shape[1], 60)
+        self.assertGreaterEqual(crop.shape[0], 250)
+        self.assertGreaterEqual(crop.shape[1], 240)
 
-    def test_validation_image_is_downscaled_before_gemma(self):
+    def test_validation_image_is_downscaled_before_nemotron(self):
         image = np.zeros((1800, 1200, 3), dtype=np.uint8)
         with patch("app.services.processing.settings.vision_validation_image_max_dim", 512):
             resized = _prepare_validation_image(image)
@@ -325,6 +338,90 @@ class SegmenterTests(unittest.TestCase):
         self.assertEqual(tuple(int(value) for value in point_coords[0]), (25, 25))
         self.assertEqual(point_labels.tolist(), [1])
         self.assertEqual(result.prompt_point, (25, 25))
+
+
+class RuntimeSafetyTests(unittest.TestCase):
+    @staticmethod
+    def _fake_torch(*, cuda_available=True, on_empty_cache=None):
+        return SimpleNamespace(
+            cuda=SimpleNamespace(
+                is_available=lambda: cuda_available,
+                empty_cache=on_empty_cache or (lambda: None),
+            )
+        )
+
+    def test_yolo_auto_device_uses_cpu_when_both_vllm_servers_are_enabled(self):
+        detector = YoloDetector.__new__(YoloDetector)
+        detector.torch = self._fake_torch()
+        with patch("app.services.cv.detector.settings.yolo_device", "auto"), patch(
+            "app.services.cv.detector.settings.device", "auto"
+        ), patch(
+            "app.services.cv.detector.settings.cv_shared_gpu_safe_mode", True
+        ), patch(
+            "app.services.cv.detector.settings.llm_enabled", True
+        ), patch(
+            "app.services.cv.detector.settings.vision_enabled", True
+        ):
+            self.assertEqual(detector._resolve_device(), "cpu")
+
+    def test_explicit_yolo_cuda_device_overrides_shared_gpu_safe_mode(self):
+        detector = YoloDetector.__new__(YoloDetector)
+        detector.torch = self._fake_torch()
+        with patch("app.services.cv.detector.settings.yolo_device", "cuda:0"), patch(
+            "app.services.cv.detector.settings.cv_shared_gpu_safe_mode", True
+        ):
+            self.assertEqual(detector._resolve_device(), "cuda:0")
+
+    def test_sam_auto_device_uses_cpu_when_both_vllm_servers_are_enabled(self):
+        segmenter = Sam2Segmenter.__new__(Sam2Segmenter)
+        segmenter.torch = self._fake_torch()
+        with patch("app.services.cv.segmenter.settings.sam_device", "auto"), patch(
+            "app.services.cv.segmenter.settings.cv_shared_gpu_safe_mode", True
+        ), patch(
+            "app.services.cv.segmenter.settings.llm_enabled", True
+        ), patch(
+            "app.services.cv.segmenter.settings.vision_enabled", True
+        ):
+            self.assertEqual(segmenter._resolve_device(), "cpu")
+
+    def test_yolo_cuda_oom_retries_once_on_cpu(self):
+        events = []
+
+        class FakeModel:
+            def predict(self, **kwargs):
+                events.append(f"predict:{kwargs['device']}")
+                if kwargs["device"].startswith("cuda"):
+                    raise RuntimeError("CUDA error: out of memory")
+                return []
+
+            def to(self, device):
+                events.append(f"move:{device}")
+
+        detector = YoloDetector.__new__(YoloDetector)
+        detector.device = "cuda:0"
+        detector.model = FakeModel()
+        detector.class_names = {}
+        detector.torch = self._fake_torch(
+            on_empty_cache=lambda: events.append("empty_cache")
+        )
+
+        self.assertEqual(detector.detect(np.zeros((20, 20, 3), dtype=np.uint8)), [])
+        self.assertEqual(
+            events,
+            ["predict:cuda:0", "move:cpu", "empty_cache", "predict:cpu"],
+        )
+        self.assertEqual(detector.device, "cpu")
+
+    def test_nemo_non_json_tool_failure_has_actionable_error(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "NeMo workflow returned non-JSON content: <empty response>",
+        ):
+            _parse_json_content("")
+
+    def test_text_only_nemo_prompts_forbid_unrelated_tool_calls(self):
+        self.assertIn("Do not call any tool", SYSTEM_PROMPT)
+        self.assertIn("Do not call any tool", TELEGRAM_ASSISTANT_PROMPT)
 
 
 class TrackerTests(unittest.TestCase):
@@ -432,7 +529,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self._incidents()), 1)
         self.assertGreaterEqual(self._incidents()[0].duration_seconds, 2.5)
 
-    async def test_gemma_validation_accepted(self):
+    async def test_nemotron_validation_accepted(self):
         inside = Detection("car", 0.9, (10, 10, 90, 90))
         await self._run_video(
             [[inside], [inside]],
@@ -448,7 +545,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(incidents), 1)
         self.assertTrue(incidents[0].incident_metadata["vision_validation"]["confirmed"])
 
-    async def test_gemma_validation_rejected(self):
+    async def test_nemotron_validation_rejected(self):
         inside = Detection("car", 0.9, (10, 10, 90, 90))
         await self._run_video(
             [[inside], [inside]],
@@ -462,7 +559,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(self._incidents()), 0)
 
-    async def test_gemma_unavailable_fail_open(self):
+    async def test_nemotron_unavailable_fail_open(self):
         inside = Detection("car", 0.9, (10, 10, 90, 90))
         fake_detector = FakeDetector([[inside], [inside]])
         with patch("app.services.processing.SessionLocal", self.SessionLocal), patch(
@@ -489,7 +586,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(incidents), 1)
         self.assertEqual(incidents[0].incident_metadata["vision_validation"]["mode"], "unavailable")
 
-    async def test_gemma_unavailable_fail_closed(self):
+    async def test_nemotron_unavailable_fail_closed(self):
         inside = Detection("car", 0.9, (10, 10, 90, 90))
         fake_detector = FakeDetector([[inside], [inside]])
         with patch("app.services.processing.SessionLocal", self.SessionLocal), patch(
@@ -708,6 +805,136 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(incidents[0].object_type, "chair")
         self.assertEqual(incidents[0].incident_metadata["zone_mode"], "full_frame")
 
+    async def test_image_pipeline_orders_nemo_yolo_sam_nemotron_then_notification(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        events = []
+
+        def detect_with_nemo(_image, confidence_threshold=None):
+            events.append("yolo_tool")
+            return {
+                "provider": "nemo-yolo",
+                "detections": [
+                    {"label": "car", "confidence": 0.91, "box": [10, 10, 20, 20]}
+                ],
+            }
+
+        def segment_with_nemo(_image, box):
+            events.append("sam_tool")
+            self.assertEqual(box, (10, 10, 20, 20))
+            return {
+                "provider": "nemo-sam",
+                "image_shape": [120, 120],
+                "segmentation": {
+                    "polygon": [[10, 10], [20, 10], [20, 20], [10, 20]],
+                    "area_pixels": 121,
+                    "prompt_box": [10, 10, 20, 20],
+                    "prompt_point": [15, 15],
+                    "score": 0.9,
+                    "model_name": "sam2.1_hiera_tiny (cpu)",
+                    "inference_ms": 12.0,
+                },
+            }
+
+        async def validate_with_nemotron(*_args, **_kwargs):
+            events.append("nemotron")
+            return {
+                "confirmed": True,
+                "category": "fire_exit_obstruction",
+                "summary": "A car overlaps the exit.",
+                "visible_evidence": ["Car is visible in the exit frame"],
+                "confidence": 0.93,
+            }
+
+        async def notify(_db, incident, _camera):
+            events.append("incident_and_telegram")
+            return incident
+
+        with self.SessionLocal() as db, patch(
+            "app.services.processing.orchestrate_object_detection_sync",
+            side_effect=detect_with_nemo,
+        ), patch(
+            "app.services.processing.orchestrate_segmentation_sync",
+            side_effect=segment_with_nemo,
+        ), patch(
+            "app.services.processing.validate_fire_exit_obstruction",
+            side_effect=validate_with_nemotron,
+        ), patch(
+            "app.services.processing.enrich_and_notify",
+            side_effect=notify,
+        ), patch(
+            "app.services.processing.event_hub.broadcast", self.noop_broadcast
+        ), patch(
+            "app.services.processing.settings.nemo_agent_enabled", True
+        ), patch(
+            "app.services.processing.settings.nemo_agent_orchestrate_cv", True
+        ), patch(
+            "app.services.processing.settings.sam_enabled", True
+        ), patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision", True
+        ), patch(
+            "app.services.processing.settings.minimum_exit_blockage_ratio", 0.05
+        ):
+            result = await analyse_image(db, self.camera, image, [])
+
+        self.assertEqual(
+            events,
+            ["yolo_tool", "sam_tool", "nemotron", "incident_and_telegram"],
+        )
+        self.assertEqual(result["zone_mode"], "full_frame")
+        self.assertTrue(result["detections"][0]["is_blocking"])
+        self.assertLess(result["detections"][0]["exit_blockage_ratio"], 0.05)
+        self.assertEqual(len(result["incidents"]), 1)
+        self.assertTrue(result["vision_validations"][0]["accepted"])
+        self.assertTrue(result["vision_validations"][0]["confirmed"])
+
+    async def test_image_result_explains_nemotron_rejection(self):
+        image = np.full((120, 120, 3), 40, dtype=np.uint8)
+        detection = Detection("chair", 0.82, (20, 20, 90, 90))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[20:90, 20:90] = True
+        segmentation = SegmentationResult(
+            mask=mask,
+            polygon=[(20, 20), (90, 20), (90, 90), (20, 90)],
+            area_pixels=int(mask.sum()),
+            prompt_box=detection.box,
+            score=0.88,
+            model_name="sam2.1_hiera_tiny",
+            inference_ms=8.0,
+        )
+        with self.SessionLocal() as db, patch(
+            "app.services.processing.get_detector",
+            return_value=FakeDetector([[detection]]),
+        ), patch(
+            "app.services.processing.get_segmenter",
+            return_value=FakeSegmenter(result=segmentation),
+        ), patch(
+            "app.services.processing.settings.sam_enabled", True
+        ), patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision", True
+        ), patch(
+            "app.services.processing.validate_fire_exit_obstruction",
+            AsyncMock(
+                return_value={
+                    "confirmed": False,
+                    "category": "fire_exit_obstruction",
+                    "summary": "The chair is not in an exit route.",
+                    "visible_evidence": ["No exit context is visible"],
+                    "confidence": 0.74,
+                    "model": "nemotron-test",
+                }
+            ),
+        ):
+            result = await analyse_image(db, self.camera, image, [])
+
+        self.assertEqual(result["incidents"], [])
+        self.assertEqual(result["telegram_status"], "not_sent")
+        self.assertEqual(len(result["vision_validations"]), 1)
+        self.assertFalse(result["vision_validations"][0]["accepted"])
+        self.assertEqual(
+            result["vision_validations"][0]["summary"],
+            "The chair is not in an exit route.",
+        )
+
     async def test_image_preview_token_reuses_cached_yolo_and_sam_stage(self):
         image = np.full((120, 120, 3), 40, dtype=np.uint8)
         detection = Detection("car", 0.9, (20, 20, 90, 90))
@@ -890,7 +1117,7 @@ class ApiFallbackTests(unittest.TestCase):
                     "preview_token": "preview-token-1",
                     "blocking_candidates": 1,
                     "will_validate_with_vision": True,
-                    "next_step": "Gemma validation",
+                    "next_step": "Nemotron validation",
                     "telegram_status": "not_sent",
                 },
             ) as preview_image:
@@ -1034,6 +1261,7 @@ class SupportServiceTests(unittest.TestCase):
     def test_fire_exit_validation_prompt_is_compact(self):
         prompt = _build_fire_exit_validation_prompt("chair")
         self.assertIn("Primary YOLO object: chair.", prompt)
+        self.assertIn("whole image is that zone", prompt)
         self.assertLess(len(prompt), 700)
 
     def test_prepare_vision_image_bytes_downscales_large_crop(self):
@@ -1231,27 +1459,8 @@ class SupportServiceTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0].title, "Fire Exit Obstruction")
 
-    def test_nemo_failure_falls_back_to_local_summary(self):
-        class FailingAsyncClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def post(self, *args, **kwargs):
-                raise httpx.ConnectError("nemo down")
-
-        with patch("app.services.llm.settings.nemo_agent_enabled", True), patch(
-            "app.services.llm.settings.nemo_agent_required", True
-        ), patch(
-            "app.services.llm.settings.llm_enabled", False
-        ), patch(
-            "app.services.llm.httpx.AsyncClient", FailingAsyncClient
-        ):
+    def test_disabled_text_model_uses_deterministic_summary(self):
+        with patch("app.services.llm.settings.llm_enabled", False):
             summary, action = asyncio.run(
                 create_grounded_summary(
                     {

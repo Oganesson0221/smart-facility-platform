@@ -12,7 +12,7 @@ can_run_python() {
 }
 
 runtime_python=""
-for candidate in ".venv/bin/python" ".app-venv/bin/python" "python3"; do
+for candidate in ".app-venv/bin/python" ".venv/bin/python" "python3"; do
   if can_run_python "$candidate"; then
     runtime_python="$candidate"
     break

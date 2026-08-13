@@ -16,7 +16,6 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-
 function toast(message, type = "") {
   const item = document.createElement("div");
   item.className = `toast ${type}`;
@@ -80,12 +79,49 @@ function notificationDetail(status = "") {
   return `Telegram status: ${value}.`;
 }
 
+function visionValidationLabel(validation) {
+  if (!validation) return "Not run";
+  const confidence = validation.confidence == null ? "" : ` · ${formatPercent(validation.confidence)}`;
+  if (validation.confirmed === true) return `Confirmed${confidence}`;
+  if (validation.confirmed === false) return `Not confirmed${confidence}`;
+  if (validation.accepted && validation.mode === "disabled") return "Accepted · validation disabled";
+  if (validation.accepted) return "Accepted through fallback";
+  return validation.mode === "unavailable" ? "Validation unavailable" : "Not confirmed";
+}
+
+function fireExitVisionValidationMarkup(validations = []) {
+  if (!validations.length) {
+    return `<p class="scene-section-copy">No candidate reached Nemotron validation.</p>`;
+  }
+  return `
+    <div class="detection-detail-list">
+      ${validations.map(validation => {
+        const evidence = Array.isArray(validation.visible_evidence)
+          ? validation.visible_evidence.filter(Boolean)
+          : [];
+        return `
+          <div class="detection-detail-row ${validation.accepted ? "blocking" : ""}">
+            <div class="detection-detail-main">
+              <strong>${escapeHtml(validation.label || "candidate")}</strong>
+              <small>${escapeHtml(visionValidationLabel(validation))} · ${escapeHtml(validation.model || "Nemotron")}</small>
+            </div>
+            <p class="detection-detail-copy">${escapeHtml(validation.summary || "No validation summary returned.")}</p>
+            ${evidence.length ? `<ul class="scene-evidence-list">${evidence.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          </div>`;
+      }).join("")}
+    </div>`;
+}
+
 function cameraPolygon(camera) {
   return (camera?.exit_zone || []).map(([x, y]) => [Number(x), Number(y)]);
 }
 
 function formatPercent(value = 0) {
   return `${Math.round((Number(value) || 0) * 100)}%`;
+}
+
+function formatOptionalPercent(value) {
+  return value == null || value === "" ? "n/a" : formatPercent(value);
 }
 
 function segmentationMethodLabel(method = "") {
@@ -206,6 +242,16 @@ function fireExitWorkflowMarkup(result, blocked) {
   const fallbacks = (result.detections || []).filter(item =>
     item.spatial_method !== "sam_mask" && (item.fallback_reason || item.segmentation_state === "fallback")
   ).length;
+  const validations = result.vision_validations || [];
+  const accepted = validations.filter(item => item.accepted).length;
+  const rejected = validations.length - accepted;
+  const validationDetail = !blocked.length
+    ? "Multimodal validation was skipped because no deterministic candidate passed"
+    : !validations.length
+      ? "No Nemotron decision was returned"
+      : rejected
+        ? `${rejected} candidate${rejected === 1 ? " was" : "s were"} not confirmed by Nemotron`
+        : `${accepted} candidate${accepted === 1 ? " was" : "s were"} confirmed by Nemotron`;
   const steps = [
     ["YOLO detection", `${(result.detections || []).length} candidate${(result.detections || []).length === 1 ? "" : "s"} scored locally`],
     [fullFrame ? "Full-frame pre-check" : "Fire-exit zone pre-check", fullFrame
@@ -218,9 +264,13 @@ function fireExitWorkflowMarkup(result, blocked) {
       : "No candidate required SAM or segmentation fell back"],
     ["Mask overlap calculation", samUsed ? "Mask-based intrusion and blockage metrics were computed" : "Existing YOLO bounding-box overlap stayed active"],
     ["Persistence", state.mediaMode === "video" ? "Track persistence remains required before incident creation" : "Still-image path does not require persistence"],
-    ["Local vision validation", blocked.length ? "Multimodal validation ran only after deterministic checks passed" : "Multimodal validation was skipped because no obstruction was confirmed"],
-    ["SOP retrieval", blocked.length ? "Existing NeMo SOP workflow remained in the incident path" : "SOP retrieval was not invoked"],
-    ["Incident notification", blocked.length ? `Incident evidence stored${result.incidents.length ? " and notification path triggered" : ""}` : "No incident was created"],
+    ["Local vision validation", validationDetail],
+    ["SOP retrieval", result.incidents.length ? "The grounded NeMo SOP workflow ran for the confirmed incident" : "SOP retrieval was skipped because no incident was confirmed"],
+    ["Incident notification", result.incidents.length
+      ? `Incident evidence stored · ${notificationDetail(result.telegram_status)}`
+      : rejected
+        ? "No incident or Telegram alert was created because Nemotron did not confirm the candidate"
+        : "No incident was created"],
   ];
   return `
     <div class="analysis-steps">
@@ -428,7 +478,12 @@ function go(view) {
     settings: ["Runtime", "System connections"],
   };
   $$(".view").forEach(el => el.classList.toggle("active", el.id === `view-${view}`));
-  $$(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
+  $$(".nav-item").forEach(el => {
+    const active = el.dataset.view === view;
+    el.classList.toggle("active", active);
+    if (active) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
+  });
   $("#pageEyebrow").textContent = titles[view][0];
   $("#pageTitle").textContent = titles[view][1];
   if (view === "overview") loadOverview();
@@ -475,6 +530,16 @@ async function loadHealth() {
         `${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"} configured`,
       );
     }
+    const runtimeIssues = [
+      visionEnabled && (!visionReachable || !visionModelAvailable),
+      nemoEnabled && !nemoReachable,
+      !telegramConfigured,
+    ].filter(Boolean).length;
+    const runtimeDisclosure = $(".runtime-disclosure");
+    runtimeDisclosure.classList.toggle("warning", runtimeIssues > 0);
+    $("#runtimeSummaryText").textContent = runtimeIssues
+      ? `${runtimeIssues} service${runtimeIssues === 1 ? "" : "s"} need attention`
+      : "All three services ready";
     $("#detectorName").textContent = health.detector === "yolo"
       ? health.sam?.enabled ? "Ultralytics YOLO + SAM 2" : "Ultralytics YOLO"
       : health.detector === "grounding_dino"
@@ -510,6 +575,8 @@ async function loadHealth() {
     $("#telegramTest").disabled = !health.telegram_configured;
   } catch (error) {
     $("#systemText").textContent = "API unavailable";
+    $("#runtimeSummaryText").textContent = "Status unavailable";
+    $(".runtime-disclosure").classList.add("warning");
     setRuntimeNode("#visionRuntime", "Health unavailable", "Could not load runtime status", "warning");
     setRuntimeNode("#agentRuntime", "Health unavailable", "Could not load runtime status", "warning");
     setRuntimeNode("#telegramRuntime", "Health unavailable", "Could not load runtime status", "warning");
@@ -560,19 +627,35 @@ function renderIncidents() {
     list.innerHTML = `<div class="empty-state"><strong>No incidents in this view</strong><br><small>Use the synthetic demo frame to exercise the complete workflow.</small></div>`;
     return;
   }
-  list.innerHTML = state.incidents.map(incident => `
-    <div class="incident-row" data-incident="${incident.id}">
-      ${incident.evidence_image
-        ? `<img class="evidence-thumb" src="/${incident.evidence_image}" alt="">`
-        : `<span class="evidence-thumb"></span>`}
-      <div class="incident-main"><strong>${escapeHtml(incident.zone)}</strong><small>${escapeHtml(incident.id)}</small></div>
-      <div class="incident-data"><strong>${escapeHtml(incident.object_type)}</strong><small>${Math.round(incident.confidence * 100)}% confidence</small></div>
-      <div class="incident-data"><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong><small>${escapeHtml(segmentationMethodLabel(incident.spatial_method || (incident.incident_metadata || {}).spatial_method))} · ${incident.duration_seconds.toFixed(1)}s</small></div>
-      <div class="incident-data"><strong>${formatDate(incident.created_at)}</strong><small>${escapeHtml(incident.facility)}</small></div>
-      <span class="badge ${incident.status}">${incident.status.replace("_", " ")}</span>
-    </div>
-  `).join("");
-  $$(".incident-row").forEach(row => row.addEventListener("click", () => openIncident(row.dataset.incident)));
+  list.innerHTML = state.incidents.map(incident => {
+    const metadata = incident.incident_metadata || {};
+    const identifier = incident.vehicle_identifier || metadata.vehicle_identifier || "";
+    const identifierType = incident.vehicle_identifier_type || metadata.vehicle_identifier_type || "";
+    const identifierLabel = identifier
+      ? `${identifier}${identifierType && identifierType !== "none" ? ` · ${identifierType.replaceAll("_", " ")}` : ""}`
+      : `${Math.round(incident.confidence * 100)}% YOLO confidence`;
+    const duration = Number(metadata.blocked_duration_seconds ?? incident.duration_seconds ?? 0);
+    return `
+      <div class="incident-row" data-incident="${incident.id}" role="button" tabindex="0" aria-label="Review incident ${escapeHtml(incident.id)}">
+        ${incident.evidence_image
+          ? `<img class="evidence-thumb" src="/${incident.evidence_image}" alt="Evidence for incident ${escapeHtml(incident.id)}">`
+          : `<span class="evidence-thumb"></span>`}
+        <div class="incident-main"><strong>${escapeHtml(incident.zone)}</strong><small>${escapeHtml(incident.id)}</small></div>
+        <div class="incident-data"><strong>${escapeHtml(incident.object_type)}</strong><small>${escapeHtml(identifierLabel)}</small></div>
+        <div class="incident-data"><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong><small>${escapeHtml(segmentationMethodLabel(incident.spatial_method || metadata.spatial_method))} · ${duration > 0 ? `${duration.toFixed(1)}s` : "snapshot"}</small></div>
+        <div class="incident-data"><strong>${formatDate(incident.created_at)}</strong><small>${escapeHtml(incident.facility)}</small></div>
+        <span class="badge ${incident.status}">${incident.status.replace("_", " ")}</span>
+      </div>`;
+  }).join("");
+  $$(".incident-row").forEach(row => {
+    row.addEventListener("click", () => openIncident(row.dataset.incident));
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openIncident(row.dataset.incident);
+      }
+    });
+  });
 }
 
 async function openIncident(id) {
@@ -584,6 +667,27 @@ async function openIncident(id) {
     const zoneMode = metadata.zone_mode || "polygon";
     const vehicleIdentifier = incident.vehicle_identifier || metadata.vehicle_identifier || "";
     const vehicleIdentifierType = incident.vehicle_identifier_type || metadata.vehicle_identifier_type || "";
+    const vehicleIdentifierConfidence = incident.vehicle_identifier_confidence ?? metadata.vehicle_identifier_confidence;
+    const yoloBox = Array.isArray(metadata.yolo_box) ? metadata.yolo_box.join(", ") : "n/a";
+    const durationSeconds = Number(metadata.blocked_duration_seconds ?? incident.duration_seconds ?? 0);
+    const durationLabel = durationSeconds > 0 ? `${durationSeconds.toFixed(1)} seconds` : "Image snapshot (not timed)";
+    const validation = metadata.vision_validation || {};
+    const validationConfirmed = validation.confirmed === true
+      ? "Confirmed"
+      : validation.confirmed === false
+        ? "Rejected"
+        : validation.mode === "disabled"
+          ? "Disabled"
+          : validation.mode === "unavailable"
+            ? "Unavailable"
+            : "Not recorded";
+    const validationConfidence = validation.confidence == null ? "n/a" : formatPercent(validation.confidence);
+    const validationEvidence = Array.isArray(validation.visible_evidence)
+      ? validation.visible_evidence.filter(Boolean)
+      : [];
+    const validationEvidenceMarkup = validationEvidence.length
+      ? `<ul class="scene-evidence-list">${validationEvidence.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : `<p>No additional visible-evidence notes were stored.</p>`;
     const segmentationNote = samPolygon.length
       ? `${samPolygon.length} polygon points · ${incident.sam_model || metadata.sam_model || "SAM"}`
       : metadata.segmentation_fallback_reason
@@ -592,35 +696,81 @@ async function openIncident(id) {
     $("#drawerContent").innerHTML = `
       ${incident.evidence_image ? `<img class="drawer-image" src="/${incident.evidence_image}" alt="Incident evidence">` : ""}
       <div class="drawer-body">
-        <p class="eyebrow mint">${escapeHtml(incident.id)}</p>
-        <h2>${escapeHtml(incident.zone)}</h2>
-        <p>${escapeHtml(incident.summary)}</p>
-        <div class="drawer-data">
-          <div><span>Status</span><strong>${escapeHtml(incident.status.replace("_", " "))}</strong></div>
-          <div><span>Severity</span><strong>${escapeHtml(incident.severity)}</strong></div>
-          <div><span>Detected</span><strong>${escapeHtml(incident.object_type)}</strong></div>
-          <div><span>Confidence</span><strong>${Math.round(incident.confidence * 100)}%</strong></div>
-          <div><span>Incident time</span><strong>${escapeHtml(formatDateTime(incident.created_at))}</strong></div>
-          <div><span>Zone intrusion</span><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong></div>
-          <div><span>Zone blockage</span><strong>${formatPercent(incident.exit_blockage_ratio ?? metadata.exit_blockage_ratio)}</strong></div>
-          <div><span>Zone basis</span><strong>${escapeHtml(zoneModeLabel(zoneMode))}</strong></div>
-          <div><span>Spatial method</span><strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong></div>
-          <div><span>Vehicle ID</span><strong>${escapeHtml(vehicleIdentifier ? `${vehicleIdentifier}${vehicleIdentifierType && vehicleIdentifierType !== "none" ? ` (${vehicleIdentifierType.replaceAll("_", " ")})` : ""}` : "n/a")}</strong></div>
-          <div><span>Track ID</span><strong>${escapeHtml(String(metadata.track_id ?? "n/a"))}</strong></div>
-          <div><span>SAM inference</span><strong>${incident.sam_inference_ms != null ? `${Math.round(incident.sam_inference_ms)} ms` : "n/a"}</strong></div>
-          <div><span>SAM score</span><strong>${incident.sam_score != null ? formatPercent(incident.sam_score) : "n/a"}</strong></div>
-          <div><span>Notification</span><strong>${escapeHtml(notificationLabel(incident.telegram_status))}</strong></div>
+        <div class="drawer-heading">
+          <p class="eyebrow mint">${escapeHtml(incident.id)}</p>
+          <h2>${escapeHtml(incident.zone)}</h2>
+          <p class="drawer-location">${escapeHtml(incident.facility)} · ${escapeHtml(formatDateTime(incident.created_at))}</p>
+          <p class="drawer-summary">${escapeHtml(incident.summary)}</p>
         </div>
-        <div class="sop-box">
-          <span>Segmentation detail</span>
-          <strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong>
-          <p>${escapeHtml(segmentationNote)}</p>
+
+        <div class="incident-summary-grid">
+          <div><span>Status</span><strong class="summary-status ${incident.status}">${escapeHtml(incident.status.replace("_", " "))}</strong></div>
+          <div><span>Detected object</span><strong>${escapeHtml(incident.object_type)} · ${Math.round(incident.confidence * 100)}%</strong></div>
+          <div><span>Exit blocked</span><strong>${formatOptionalPercent(incident.exit_blockage_ratio ?? metadata.exit_blockage_ratio)}</strong></div>
+          <div><span>Vehicle identifier</span><strong>${escapeHtml(vehicleIdentifier || "Not readable")}</strong></div>
         </div>
-        <div class="sop-box">
-          <span>Grounded recommendation · ${escapeHtml(incident.sop_title)}</span>
-          <strong>Recommended first action</strong>
+
+        <section class="response-callout">
+          <span>Recommended first action · ${escapeHtml(incident.sop_title)}</span>
           <p>${escapeHtml(incident.recommended_action)}</p>
-        </div>
+        </section>
+
+        <details class="drawer-section" open>
+          <summary><span><strong>Operational context</strong><small>Location, overlap, timing, and alert delivery</small></span></summary>
+          <div class="drawer-section-body">
+            <div class="drawer-data">
+              <div><span>Severity</span><strong>${escapeHtml(incident.severity)}</strong></div>
+              <div><span>Blocked duration</span><strong>${escapeHtml(durationLabel)}</strong></div>
+              <div><span>Object inside zone</span><strong>${formatPercent(incident.object_intrusion_ratio ?? incident.overlap)}</strong></div>
+              <div><span>Mask / zone IoU</span><strong>${formatOptionalPercent(incident.mask_zone_iou ?? metadata.mask_zone_iou)}</strong></div>
+              <div><span>Nemotron review</span><strong>${escapeHtml(validationConfirmed)} · ${escapeHtml(validationConfidence)}</strong></div>
+              <div><span>Notification</span><strong>${escapeHtml(notificationLabel(incident.telegram_status))}</strong></div>
+            </div>
+            <p class="drawer-note">${escapeHtml(notificationDetail(incident.telegram_status))}</p>
+          </div>
+        </details>
+
+        <details class="drawer-section">
+          <summary><span><strong>Detection evidence</strong><small>YOLO, SAM, zone, and tracking measurements</small></span></summary>
+          <div class="drawer-section-body">
+            <div class="drawer-data">
+              <div><span>YOLO confidence</span><strong>${Math.round(incident.confidence * 100)}%</strong></div>
+              <div><span>YOLO box</span><strong>${escapeHtml(yoloBox)}</strong></div>
+              <div><span>Zone basis</span><strong>${escapeHtml(zoneModeLabel(zoneMode))}</strong></div>
+              <div><span>Spatial method</span><strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong></div>
+              <div><span>First seen</span><strong>${escapeHtml(formatDateTime(incident.first_seen))}</strong></div>
+              <div><span>Last seen</span><strong>${escapeHtml(formatDateTime(incident.last_seen))}</strong></div>
+              <div><span>Track ID</span><strong>${escapeHtml(String(metadata.track_id ?? "n/a"))}</strong></div>
+              <div><span>SAM inference</span><strong>${incident.sam_inference_ms != null ? `${Math.round(incident.sam_inference_ms)} ms` : "n/a"}</strong></div>
+              <div><span>SAM score</span><strong>${incident.sam_score != null ? formatPercent(incident.sam_score) : "n/a"}</strong></div>
+              <div><span>Mask area</span><strong>${metadata.mask_area_pixels != null ? `${Number(metadata.mask_area_pixels).toLocaleString()} px` : "n/a"}</strong></div>
+            </div>
+            <div class="sop-box compact-sop-box">
+              <span>Segmentation detail</span>
+              <strong>${escapeHtml(segmentationMethodLabel(spatialMethod))}</strong>
+              <p>${escapeHtml(segmentationNote)}</p>
+            </div>
+          </div>
+        </details>
+
+        <details class="drawer-section">
+          <summary><span><strong>Vision review</strong><small>Nemotron observations and vehicle evidence</small></span></summary>
+          <div class="drawer-section-body">
+            ${vehicleIdentifier ? `
+              <div class="sop-box compact-sop-box">
+                <span>Vehicle identifier · vision-assisted · ${formatOptionalPercent(vehicleIdentifierConfidence)}</span>
+                <strong>${escapeHtml(vehicleIdentifier)}${vehicleIdentifierType && vehicleIdentifierType !== "none" ? ` · ${escapeHtml(vehicleIdentifierType.replaceAll("_", " "))}` : ""}</strong>
+                <p>Verify this read against the saved image before operational use.</p>
+              </div>
+            ` : ""}
+            <div class="sop-box compact-sop-box">
+              <span>Nemotron · ${escapeHtml(validationConfirmed)}${validation.confidence != null ? ` · ${formatPercent(validation.confidence)}` : ""}</span>
+              <strong>${escapeHtml(validation.summary || "Vision validation details")}</strong>
+              ${validationEvidenceMarkup}
+            </div>
+          </div>
+        </details>
+
         <div class="drawer-actions">
           <button class="button bright" data-action="acknowledge">Acknowledge</button>
           <button class="button ghost" data-action="false-alarm">False alarm</button>
@@ -645,12 +795,17 @@ function closeDrawer() {
   $("#drawerBackdrop").classList.remove("open");
 }
 
+function incidentIdFromHash() {
+  const match = String(location.hash || "").match(/^#incident=(INC-[A-Za-z0-9-]+)$/i);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 function renderCameras() {
   const grid = $("#cameraGrid");
   if (!grid) return;
   grid.innerHTML = state.cameras.map(camera => `
     <article class="panel camera-card">
-      <div class="camera-card-top"><span class="camera-card-icon">◉</span><button class="icon-button" data-edit-camera="${camera.id}">•••</button></div>
+      <div class="camera-card-top"><span class="camera-card-label">Camera</span><button class="icon-button" data-edit-camera="${camera.id}" aria-label="Edit ${escapeHtml(camera.name)}">•••</button></div>
       <h3>${escapeHtml(camera.name)}</h3>
       <p>${escapeHtml(camera.facility)} · ${escapeHtml(camera.zone)}</p>
       <dl>
@@ -699,12 +854,12 @@ function updateZoneStatus() {
   const samActive = state.runtime.samEnabled && state.runtime.samReady;
   $("#zoneStatus").classList.toggle("ready", ready);
   $("#zoneStatus").innerHTML = ready
-    ? `<span>◆</span><div><strong>Clearance zone active</strong><small>${state.polygon.length} points · deterministic rules in effect</small></div>`
+    ? `<div><strong>Clearance zone active</strong><small>${state.polygon.length} points · deterministic rules in effect</small></div>`
     : state.mediaMode === "image"
       ? samActive
-        ? `<span>✦</span><div><strong>Full-frame analysis</strong><small>YOLO prompts SAM on relevant detections across the whole image</small></div>`
-        : `<span>✦</span><div><strong>Full-frame fallback</strong><small>SAM is not ready${state.runtime.samDetail ? `: ${escapeHtml(state.runtime.samDetail)}` : ""}. YOLO box overlap stays active.</small></div>`
-      : `<span>◇</span><div><strong>Zone required for video</strong><small>Draw at least three points to run video monitoring</small></div>`;
+        ? `<div><strong>Full-frame analysis</strong><small>YOLO prompts SAM on relevant detections across the whole image</small></div>`
+        : `<div><strong>Full-frame fallback</strong><small>SAM is not ready${state.runtime.samDetail ? `: ${escapeHtml(state.runtime.samDetail)}` : ""}. YOLO box overlap stays active.</small></div>`
+      : `<div><strong>Zone required for video</strong><small>Draw at least three points to run video monitoring</small></div>`;
   $("#analyseLabel").textContent = ready
     ? (state.mediaMode === "image" ? "Analyse clearance zone" : "Analyse video")
     : state.mediaMode === "image"
@@ -872,6 +1027,9 @@ function renderSceneResult(result) {
 
 function renderAnalysisResult(result) {
   const blocked = result.detections.filter(item => item.is_blocking);
+  const validations = result.vision_validations || [];
+  const rejectedValidations = validations.filter(item => !item.accepted);
+  const primaryValidation = validations[0] || null;
   const primary = blocked[0] || result.detections[0] || null;
   const spatialMethod = primary ? segmentationMethodLabel(primary.spatial_method) : "None";
   const fullFrame = String(result.zone_mode || "").toLowerCase() === "full_frame";
@@ -880,8 +1038,12 @@ function renderAnalysisResult(result) {
       <img src="${result.annotated_image}?t=${Date.now()}" alt="Annotated analysis result">
       <div class="result-copy">
         <p class="eyebrow ${blocked.length ? "" : "mint"}">${escapeHtml(result.provider)} ${fullFrame ? "full-frame workflow" : "fire-exit workflow"}</p>
-        <h3>${blocked.length
-          ? `${blocked.length} obstruction${blocked.length > 1 ? "s" : ""} detected`
+        <h3>${result.incidents.length
+          ? `${result.incidents.length} incident${result.incidents.length > 1 ? "s" : ""} confirmed`
+          : rejectedValidations.length
+            ? `${rejectedValidations.length} candidate${rejectedValidations.length > 1 ? "s" : ""} not confirmed`
+          : blocked.length
+            ? `${blocked.length} obstruction candidate${blocked.length > 1 ? "s" : ""} detected`
           : fullFrame
             ? "No blocking object met the full-frame thresholds"
             : "Fire-exit clearance zone is clear"}</h3>
@@ -906,11 +1068,20 @@ function renderAnalysisResult(result) {
             <span>Notification</span>
             <strong>${escapeHtml(notificationLabel(result.telegram_status || ""))}</strong>
           </div>
+          <div class="scene-metric">
+            <span>Nemotron</span>
+            <strong>${escapeHtml(visionValidationLabel(primaryValidation))}</strong>
+          </div>
         </div>
-        <p class="result-summary-copy">${blocked.length
-          ? `The deterministic workflow created ${result.incidents.length} incident record(s) and stored the annotated evidence image.`
+        <p class="result-summary-copy">${result.incidents.length
+          ? `YOLO and SAM identified the obstruction, Nemotron confirmed it, and ${result.incidents.length} incident record(s) were created. ${escapeHtml(notificationDetail(result.telegram_status))}`
+          : rejectedValidations.length
+            ? `YOLO and SAM identified an obstruction candidate, but Nemotron did not confirm it: ${escapeHtml(primaryValidation?.summary || "no confirmation reason was returned")}. No incident or Telegram alert was created.`
+          : blocked.length
+            ? "YOLO and SAM identified an obstruction candidate, but no final incident decision was returned."
           : "Objects may have been detected, but none met the configured class, intrusion, blockage, and persistence rules."}</p>
         ${detailCard("Workflow details", fireExitWorkflowMarkup(result, blocked), true)}
+        ${validations.length ? detailCard("Nemotron decision", fireExitVisionValidationMarkup(validations), true) : ""}
         ${detailCard(
           "Detection details",
           `<p class="scene-section-copy">${fullFrame
@@ -923,7 +1094,11 @@ function renderAnalysisResult(result) {
     </article>`;
   const open = $("[data-open-result]");
   if (open) open.addEventListener("click", () => openIncident(open.dataset.openResult));
-  toast(blocked.length ? "Incident workflow completed" : "Analysis completed");
+  toast(result.incidents.length
+    ? "Incident confirmed and notification processed"
+    : rejectedValidations.length
+      ? "Candidate was not confirmed by Nemotron"
+      : "Analysis completed");
 }
 
 function renderJob(job) {
@@ -1003,6 +1178,10 @@ async function saveCamera(event) {
 }
 
 function wireEvents() {
+  const runtimeDisclosure = $(".runtime-disclosure");
+  runtimeDisclosure.addEventListener("toggle", () => {
+    $(".runtime-summary-action").textContent = runtimeDisclosure.open ? "Hide status" : "View status";
+  });
   $$(".nav-item").forEach(button => button.addEventListener("click", () => go(button.dataset.view)));
   $$("[data-go]").forEach(button => button.addEventListener("click", () => go(button.dataset.go)));
   $("#refreshOverview").addEventListener("click", loadOverview);
@@ -1111,6 +1290,12 @@ function connectEvents() {
 async function init() {
   wireEvents();
   await Promise.all([loadHealth(), loadCameras(), loadOverview()]);
+  const linkedIncident = incidentIdFromHash();
+  if (linkedIncident) await openIncident(linkedIncident);
+  window.addEventListener("hashchange", () => {
+    const incidentId = incidentIdFromHash();
+    if (incidentId) openIncident(incidentId);
+  });
   connectEvents();
 }
 

@@ -146,6 +146,25 @@ async def health(db: Session = Depends(get_db)):
     llm_status = await llm_runtime_status()
     vision_status = await vision_runtime_status()
     nemo_status = await nemo_agent_runtime_status()
+    sam_status = segmenter_runtime_status()
+    if (
+        settings.sam_enabled
+        and settings.nemo_agent_enabled
+        and settings.nemo_agent_orchestrate_cv
+        and bool(nemo_status.get("reachable"))
+    ):
+        local_detail = str(sam_status.get("detail") or "unknown")
+        sam_status = {
+            **sam_status,
+            "local_ready": bool(sam_status.get("ready")),
+            "ready": True,
+            "effective_provider": "nemo-agent",
+            "detail": (
+                "ready through NeMo Agent Toolkit"
+                if sam_status.get("ready")
+                else f"ready through NeMo Agent Toolkit; local fallback {local_detail}"
+            ),
+        }
     latest_incident = db.scalar(select(Incident).order_by(Incident.created_at.desc()))
     recipients = subscriber_chat_ids(db)
     return {
@@ -171,7 +190,7 @@ async def health(db: Session = Depends(get_db)):
             "base_url": settings.vision_base_url,
             **vision_status,
         },
-        "sam": segmenter_runtime_status(),
+        "sam": sam_status,
         "telegram_configured": is_configured(),
         "telegram_subscribers": db.scalar(
             select(func.count())

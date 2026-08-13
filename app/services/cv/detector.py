@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import logging
 from threading import Lock
 
 import cv2
@@ -6,6 +7,23 @@ import numpy as np
 
 from app.config import settings
 from app.services.cv.types import Detection
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _shared_gpu_safe_mode_active() -> bool:
+    """Keep CV off a GPU already reserved by both local vLLM servers."""
+    return bool(
+        settings.cv_shared_gpu_safe_mode
+        and settings.llm_enabled
+        and settings.vision_enabled
+    )
+
+
+def _is_cuda_out_of_memory(error: BaseException) -> bool:
+    message = str(error).lower()
+    return "cuda" in message and ("out of memory" in message or "memoryallocation" in message)
 
 
 class Detector(ABC):
@@ -57,7 +75,11 @@ class GroundingDinoDetector(Detector):
 
         self.torch = torch
         if settings.device == "auto":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = (
+                "cpu"
+                if _shared_gpu_safe_mode_active()
+                else "cuda" if torch.cuda.is_available() else "cpu"
+            )
         else:
             self.device = settings.device
         if self.device == "cuda" and not torch.cuda.is_available():
@@ -121,24 +143,45 @@ class YoloDetector(Detector):
     def _resolve_device(self) -> str:
         requested = settings.yolo_device if settings.yolo_device != "auto" else settings.device
         if requested == "auto":
+            if _shared_gpu_safe_mode_active():
+                LOGGER.info(
+                    "YOLO auto device resolved to CPU because both local vLLM servers are enabled"
+                )
+                return "cpu"
             return "cuda:0" if self.torch.cuda.is_available() else "cpu"
         if requested == "cuda" and not self.torch.cuda.is_available():
             return "cpu"
         return requested
 
     def detect(self, image: np.ndarray) -> list[Detection]:
-        results = self.model.predict(
+        try:
+            results = self._predict(image)
+        except RuntimeError as exc:
+            if not self.device.startswith("cuda") or not _is_cuda_out_of_memory(exc):
+                raise
+            LOGGER.warning(
+                "YOLO exhausted CUDA memory; moving the detector to CPU and retrying once"
+            )
+            self.device = "cpu"
+            try:
+                self.model.to("cpu")
+            finally:
+                self.torch.cuda.empty_cache()
+            results = self._predict(image)
+        if not results:
+            return []
+        return suppress_duplicate_detections(
+            convert_yolo_results(results[0].boxes, self.class_names)
+        )
+
+    def _predict(self, image: np.ndarray):
+        return self.model.predict(
             source=image,
             conf=settings.yolo_confidence_threshold,
             imgsz=settings.yolo_image_size,
             device=self.device,
             verbose=False,
             agnostic_nms=True,
-        )
-        if not results:
-            return []
-        return suppress_duplicate_detections(
-            convert_yolo_results(results[0].boxes, self.class_names)
         )
 
 

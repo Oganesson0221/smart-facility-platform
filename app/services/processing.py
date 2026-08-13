@@ -611,10 +611,10 @@ def _crop_validation_region(
     full_frame_zone = _is_full_frame_zone(polygon_points, width, height)
     margin = max(24, int(max(x2 - x1, y2 - y1) * (0.18 if full_frame_zone else 0.12)))
     if full_frame_zone:
-        left = max(0, x1 - margin)
-        top = max(0, y1 - margin)
-        right = min(width, x2 + margin)
-        bottom = min(height, y2 + margin)
+        # The whole image is the configured exit zone in this mode. Preserve
+        # the door, signage, and approach-path context for Nemotron instead of
+        # sending an object-only crop that cannot prove an exit obstruction.
+        return image.copy()
     else:
         xs = [int(point[0]) for point in polygon_points]
         ys = [int(point[1]) for point in polygon_points]
@@ -905,6 +905,7 @@ def _image_analysis_payload(
     incidents: list[Incident],
     *,
     preview_only: bool,
+    vision_validations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     blocking = [item for item in stage.obstructions if item.is_blocking]
     will_validate = bool(blocking) and settings.validate_fire_exit_incidents_with_vision
@@ -915,6 +916,7 @@ def _image_analysis_payload(
         "annotated_image": f"/{stage.annotated_relative}",
         "zone_mode": stage.zone_mode,
         "telegram_status": _analysis_telegram_status(incidents),
+        "vision_validations": vision_validations or [],
     }
     if preview_only:
         payload.update(
@@ -923,7 +925,7 @@ def _image_analysis_payload(
                 "blocking_candidates": len(blocking),
                 "will_validate_with_vision": will_validate,
                 "next_step": (
-                    "Gemma validation"
+                    "Nemotron validation"
                     if will_validate
                     else "Incident finalization"
                     if blocking
@@ -1130,7 +1132,10 @@ def _evaluate_obstructions(
             polygon,
             blocked_classes,
             camera.minimum_overlap,
-            settings.minimum_exit_blockage_ratio,
+            # A percentage-of-zone threshold is useful for a drawn clearance
+            # polygon, but not when the entire image is explicitly the exit.
+            # In full-frame mode, any qualifying SAM/box intrusion can proceed.
+            0.0 if allow_all_classes else settings.minimum_exit_blockage_ratio,
             segmentation=segmentation,
             polygon_points=polygon_points,
             reject_candidate=reject_candidate,
@@ -1174,12 +1179,34 @@ async def analyse_image(
             cache_stage=False,
         )
     incidents = []
+    vision_validations: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for obstruction in stage.obstructions:
         if not obstruction.is_blocking:
             continue
         confirmed, validation, crop_relative = await _confirm_fire_exit_candidate(
             None, stage.image, obstruction, stage.polygon_points
+        )
+        vision_validations.append(
+            {
+                "label": obstruction.detection.label,
+                "box": [int(value) for value in obstruction.detection.box],
+                "accepted": confirmed,
+                "confirmed": validation.get("confirmed"),
+                "confidence": validation.get("confidence"),
+                "summary": str(validation.get("summary") or validation.get("error") or "No validation summary returned."),
+                "visible_evidence": list(validation.get("visible_evidence") or []),
+                "mode": str(validation.get("mode") or "vision"),
+                "model": str(validation.get("model") or settings.vision_model),
+            }
+        )
+        LOGGER.info(
+            "Nemotron candidate decision label=%s accepted=%s confirmed=%s confidence=%s summary=%s",
+            obstruction.detection.label,
+            confirmed,
+            validation.get("confirmed"),
+            validation.get("confidence"),
+            validation.get("summary") or validation.get("error") or "n/a",
         )
         if not confirmed:
             continue
@@ -1211,7 +1238,12 @@ async def analyse_image(
         len(incidents),
         sum(1 for item in stage.obstructions if item.segmentation is not None),
     )
-    return _image_analysis_payload(stage, incidents, preview_only=False)
+    return _image_analysis_payload(
+        stage,
+        incidents,
+        preview_only=False,
+        vision_validations=vision_validations,
+    )
 
 
 async def create_scene_incident(

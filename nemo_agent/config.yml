@@ -28,7 +28,9 @@ workflow:
     - facility_scene_assessor
     - facility_fire_exit_validator
   verbose: false
-  handle_tool_errors: true
+  # Surface tool failures to the HTTP client so an exception is never disguised
+  # as a successful, empty assistant response.
+  handle_tool_errors: false
   # Scene analysis can require detection followed by multimodal inspection;
   # leave enough room for tool results and one retry while retaining a hard cap.
   max_iterations: 8
@@ -38,6 +40,7 @@ workflow:
     - facility_object_detector
     - facility_segmenter
     - facility_scene_assessor
+    - facility_fire_exit_validator
 
 general:
   front_end:

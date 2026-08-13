@@ -40,7 +40,14 @@ fi
 host="${VISION_VLLM_HOST:-0.0.0.0}"
 port="${VISION_VLLM_PORT:-8002}"
 served_model_name="${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}"
-model_source="${VISION_MODEL_SOURCE:-$served_model_name}"
+default_local_source="$(pwd)/models/${served_model_name}"
+if [[ -n "${VISION_MODEL_SOURCE:-}" ]]; then
+  model_source="$VISION_MODEL_SOURCE"
+elif [[ -f "$default_local_source/config.json" ]]; then
+  model_source="$default_local_source"
+else
+  model_source="$served_model_name"
+fi
 api_key="${VISION_API_KEY:-${LLM_API_KEY:-}}"
 mm_limit_per_prompt="${VISION_MM_LIMIT_PER_PROMPT:-{\"image\":1}}"
 max_model_len="${VISION_MAX_MODEL_LEN:-8192}"

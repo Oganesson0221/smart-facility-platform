@@ -15,6 +15,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """You are the Smart Facility Platform safety incident assistant.
+This is a text-only summary request. Do not call any tool: the detector,
+segmenter, vision validator, scene assessor, and SOP retrieval stages have
+already finished, and the complete grounded inputs are supplied below.
 Use only the supplied incident fields and SOP excerpts. Never invent safety
 instructions. If scene_assessment or scene_detections are supplied, ground the
 summary in those detected objects and visible observations. Return JSON with
@@ -22,11 +25,16 @@ exactly two string keys: summary and
 recommended_action. Keep each under 60 words."""
 
 TELEGRAM_ASSISTANT_PROMPT = """You are the Smart Facility Telegram safety assistant.
+This is a text-only question-answering request. Do not call any tool; all
+available incident fields and local SOP material are supplied below.
 Use only the supplied local SOP reference, matched SOP excerpts, and incident
-fields. Never invent procedures. Answer the user's question directly in plain
-text. If the user asks what to do next, give concise numbered steps. If the
-question is ambiguous, ask for the incident ID or say you are using the latest
-incident context if one was supplied. Keep the reply under 120 words."""
+fields. Never invent procedures. Answer only the user's current question in
+plain text. Do not quote or reproduce the question, chat history, input JSON,
+or the full incident unless the user explicitly asks for incident details. Do
+not repeat the same answer under multiple headings. If the user asks what to do
+next, give one concise numbered list. If the question is ambiguous, ask for the
+incident ID or say you are using the latest incident context if one was
+supplied. Keep the reply under 120 words."""
 
 
 async def nemo_agent_runtime_status() -> dict[str, object]:
@@ -201,27 +209,6 @@ async def create_grounded_summary_direct(
     ]
     user_content = json.dumps({"incident": incident, "sops": excerpts}, default=str)
 
-    if settings.nemo_agent_enabled:
-        try:
-            payload = await chat_completions(
-                base_url=settings.nemo_agent_base_url,
-                api_key=settings.nemo_agent_api_key,
-                timeout_seconds=settings.nemo_agent_timeout_seconds,
-                model=settings.nemo_agent_model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.1,
-            )
-            content = extract_chat_message_content(payload)
-            return _parse_result(content, fallback)
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            LOGGER.warning(
-                "NeMo agent workflow unavailable; falling back to local summary path: %s",
-                exc,
-            )
-
     if not settings.llm_enabled:
         return fallback
 
@@ -265,26 +252,6 @@ async def answer_sop_question_direct(
         },
         default=str,
     )
-
-    if settings.nemo_agent_enabled:
-        try:
-            payload = await chat_completions(
-                base_url=settings.nemo_agent_base_url,
-                api_key=settings.nemo_agent_api_key,
-                timeout_seconds=settings.nemo_agent_timeout_seconds,
-                model=settings.nemo_agent_model,
-                messages=[
-                    {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.1,
-            )
-            content = coerce_text_content(extract_chat_message_content(payload))
-            return content or fallback
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-            # The Telegram assistant must still answer from the local SOP reference
-            # even when the NeMo workflow is unavailable.
-            pass
 
     if not settings.llm_enabled:
         return fallback
