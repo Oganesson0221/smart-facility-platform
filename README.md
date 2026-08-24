@@ -89,7 +89,10 @@ uv pip install --python .nemo-venv/bin/python -e ./third_party/sam2
 ```
 
 This installs NeMo Agent Toolkit, the project NeMo plugin, vLLM, and SAM 2 in
-`.nemo-venv`.
+`.nemo-venv`. On Python 3.11, the setup script also applies the upstream
+FlashInfer deferred-annotation fix required by current vLLM releases.
+The launchers leave vLLM compilation mode at its architecture-aware default,
+which is required on NVIDIA GB10/aarch64 systems.
 
 ## 5. Download all models locally
 

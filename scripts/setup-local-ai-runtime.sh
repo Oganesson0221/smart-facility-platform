@@ -29,6 +29,7 @@ fi
 
 "$uv_bin" pip install --python .nemo-venv/bin/python -r requirements-nemo.txt
 "$uv_bin" pip install --python .nemo-venv/bin/python vllm
+.nemo-venv/bin/python scripts/patch-flashinfer-python311.py
 
 if [[ -d "third_party/sam2" ]]; then
   echo "Optional: install SAM 2 into the NeMo environment with:"
