@@ -5,11 +5,6 @@ SAM 2 segmentation, deterministic clearance-zone geometry, Nemotron
 multimodal validation, NVIDIA NeMo Agent Toolkit orchestration, SQLite incident
 management, a browser dashboard, and Telegram response workflows.
 
-## Audit verdict: does this use NeMo Agent Toolkit?
-
-Yes. The AI orchestration layer is a real NVIDIA NeMo Agent Toolkit (NAT)
-workflow, not a directory named “NeMo” or a direct model call presented as an
-agent framework.
 
 The repository contains all of the integration points required by the current
 Toolkit plugin model:
