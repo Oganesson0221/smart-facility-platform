@@ -50,33 +50,14 @@ else
 fi
 max_model_len="${LLM_MAX_MODEL_LEN:-8192}"
 gpu_memory_utilization="${LLM_GPU_MEMORY_UTILIZATION:-0.35}"
-chat_template="${LLM_CHAT_TEMPLATE:-${GEMMA4_CHAT_TEMPLATE:-}}"
 tool_call_parser="${LLM_TOOL_CALL_PARSER:-}"
 reasoning_parser="${LLM_REASONING_PARSER:-}"
-
-looks_like_gemma4() {
-  local value="${1:-}"
-  value="${value,,}"
-  [[ "$value" == *gemma-4* || "$value" == *gemma4* ]]
-}
 
 looks_like_qwen25() {
   local value="${1:-}"
   value="${value,,}"
   [[ "$value" == *qwen2.5* || "$value" == *qwen-2.5* ]]
 }
-
-if [[ -z "${tool_call_parser}" ]] && {
-  looks_like_gemma4 "$served_model_name" || looks_like_gemma4 "$model_source"
-}; then
-  tool_call_parser="gemma4"
-fi
-
-if [[ -z "${reasoning_parser}" ]] && {
-  looks_like_gemma4 "$served_model_name" || looks_like_gemma4 "$model_source"
-}; then
-  reasoning_parser="gemma4"
-fi
 
 # Qwen 2.5 ships a Hermes-compatible tool-use chat template. NAT's
 # tool_calling_agent sends tool_choice=auto, so vLLM must have both automatic
@@ -85,17 +66,6 @@ if [[ -z "${tool_call_parser}" ]] && {
   looks_like_qwen25 "$served_model_name" || looks_like_qwen25 "$model_source"
 }; then
   tool_call_parser="hermes"
-fi
-
-if ! {
-  looks_like_gemma4 "$served_model_name" || looks_like_gemma4 "$model_source"
-}; then
-  chat_template=""
-fi
-
-if [[ -z "${chat_template}" && "${tool_call_parser}" == "gemma4" ]]; then
-  echo "Warning: GEMMA4_CHAT_TEMPLATE is not set."
-  echo "Gemma 4 tool calling on vLLM typically needs an explicit chat template."
 fi
 
 args=(
@@ -109,10 +79,6 @@ args=(
 
 if [[ -n "${tool_call_parser}" ]]; then
   args+=(--enable-auto-tool-choice)
-fi
-
-if [[ -n "${chat_template}" ]]; then
-  args+=(--chat-template "$chat_template")
 fi
 
 if [[ -n "${tool_call_parser}" ]]; then

@@ -1478,7 +1478,7 @@ class SupportServiceTests(unittest.TestCase):
 
     def test_llm_runtime_status_reports_model_availability(self):
         with patch("app.services.llm.settings.llm_enabled", True), patch(
-            "app.services.llm.settings.llm_model", "google/gemma-4-12B-it"
+            "app.services.llm.settings.llm_model", "Qwen/Qwen2.5-7B-Instruct"
         ), patch(
             "app.services.llm.settings.llm_base_url", "http://127.0.0.1:8001/v1"
         ), patch(
@@ -1487,7 +1487,7 @@ class SupportServiceTests(unittest.TestCase):
             "app.services.llm.settings.llm_timeout_seconds", 30.0
         ), patch(
             "app.services.llm.list_models",
-            AsyncMock(return_value=["google/gemma-4-12B-it"]),
+            AsyncMock(return_value=["Qwen/Qwen2.5-7B-Instruct"]),
         ):
             status = asyncio.run(llm_runtime_status())
 
