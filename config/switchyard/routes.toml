@@ -1,0 +1,31 @@
+# Native switchyard-server deployment for ExitWatch.
+# Validated with: switchyard-server --config config/switchyard/routes.toml --dry-run
+schema_version = 1
+
+[llm_clients.qwen_vllm]
+format = "openai_chat"
+base_url = "http://127.0.0.1:8001/v1"
+api_key_env = "LLM_API_KEY"
+max_retries = 2
+
+[llm_clients.nemotron_vllm]
+format = "openai_chat"
+base_url = "http://127.0.0.1:8002/v1"
+api_key_env = "VISION_API_KEY"
+max_retries = 2
+
+[targets.efficient]
+id = "Qwen/Qwen2.5-7B-Instruct"
+llm_client = "qwen_vllm"
+
+[targets.capable]
+id = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+llm_client = "nemotron_vllm"
+
+[routes.exitwatch_stage]
+id = "switchyard/exitwatch-stage"
+type = "stage_router"
+efficient_target = "efficient"
+capable_target = "capable"
+picker = "efficient_first"
+confidence_threshold = 0.5

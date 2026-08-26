@@ -29,8 +29,6 @@ if [[ -z "${vllm_bin:-}" ]]; then
   exit 1
 fi
 
-export HF_TOKEN="${HF_TOKEN:-${VISION_API_KEY:-${LLM_API_KEY:-}}}"
-
 if [[ "${ALLOW_HF_OFFLINE:-false}" != "true" ]]; then
   unset HF_HUB_OFFLINE
   unset TRANSFORMERS_OFFLINE

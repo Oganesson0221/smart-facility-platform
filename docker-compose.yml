@@ -3,8 +3,12 @@ services:
     build: .
     env_file:
       - .env
-    ports:
-      - "8000:8000"
+    environment:
+      SAM_CHECKPOINT_PATH: /app/third_party/sam2/checkpoints/sam2.1_hiera_tiny.pt
+    # Linux host networking lets the app use the same 127.0.0.1 model URLs as
+    # the host-run vLLM, Switchyard, and NeMo Agent Toolkit services.
+    network_mode: host
+    init: true
     volumes:
       - ./data:/app/data
       - ./uploads:/app/uploads

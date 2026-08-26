@@ -51,6 +51,19 @@ if (( ${#missing_tools[@]} > 0 )); then
   exit 1
 fi
 
+if [[ "${SWITCHYARD_ENABLED:-true}" == "true" ]]; then
+  switchyard_base="${SWITCHYARD_BASE_URL:-http://127.0.0.1:4000}"
+  switchyard_base="${switchyard_base%/}"
+  [[ "$switchyard_base" == */v1 ]] || switchyard_base="${switchyard_base}/v1"
+  export NAT_LLM_BASE_URL="$switchyard_base"
+  export NAT_LLM_MODEL="${SWITCHYARD_MODEL:-switchyard/exitwatch-stage}"
+  export NAT_LLM_API_KEY="${SWITCHYARD_API_KEY:-EMPTY}"
+else
+  export NAT_LLM_BASE_URL="${LLM_BASE_URL:-http://127.0.0.1:8001/v1}"
+  export NAT_LLM_MODEL="${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+  export NAT_LLM_API_KEY="${LLM_API_KEY:-EMPTY}"
+fi
+
 export SOP_DIRECTORY="${SOP_DIRECTORY:-$(pwd)/sops}"
 export NAT_CONFIG_DIR="${NAT_CONFIG_DIR:-$(pwd)/.nat-config}"
 export PYTHONPATH="$(pwd)${PYTHONPATH:+:${PYTHONPATH}}"

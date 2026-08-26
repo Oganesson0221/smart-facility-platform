@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_timeout_seconds: float = 45.0
 
+    switchyard_enabled: bool = True
+    switchyard_base_url: str = "http://127.0.0.1:4000"
+    switchyard_model: str = "switchyard/exitwatch-stage"
+    switchyard_api_key: str = ""
+    switchyard_timeout_seconds: float = 60.0
+    switchyard_fallback_enabled: bool = True
+    switchyard_routing_log_path: str = "logs/switchyard-routing.jsonl"
+    switchyard_ui_enabled: bool = True
+
     nemo_agent_enabled: bool = True
     nemo_agent_base_url: str = "http://127.0.0.1:8010/v1"
     nemo_agent_model: str = "smart-facility-agent"

@@ -107,3 +107,10 @@ async def websocket_events(websocket: WebSocket):
 @app.get("/", include_in_schema=False)
 def dashboard():
     return FileResponse(ROOT / "app" / "static" / "index.html")
+
+
+@app.get("/switchyard", include_in_schema=False)
+def switchyard_dashboard():
+    if not settings.switchyard_ui_enabled:
+        return FileResponse(ROOT / "app" / "static" / "index.html")
+    return FileResponse(ROOT / "app" / "static" / "switchyard.html")

@@ -63,7 +63,7 @@ check_nemo_tool_call() {
   local base_url
   base_url="$(openai_base_url "${NEMO_AGENT_BASE_URL:-http://127.0.0.1:8010/v1}")"
   local url="${base_url}/chat/completions"
-  local image_path="$(pwd)/lab_images/car4.jpg"
+  local image_path="$(pwd)/tests/car4.jpeg"
   local payload response
   payload="$(printf '{"model":"%s","messages":[{"role":"system","content":"Do not answer directly. Call detect_image_objects exactly once with the supplied image_path and confidence_threshold=0.35. Return only the tool result."},{"role":"user","content":"Run detection for image_path=%s now."}],"temperature":0,"stream":false}' "${NEMO_AGENT_MODEL:-smart-facility-agent}" "$image_path")"
   local curl_args=(--connect-timeout 2 --max-time "${NEMO_AGENT_TIMEOUT_SECONDS:-120}" -fsS -X POST -H "Content-Type: application/json")
@@ -81,7 +81,28 @@ check_nemo_tool_call() {
   fi
 }
 
+check_switchyard_route() {
+  local scenario="$1"
+  local expected_model="$2"
+  local response
+  if ! response="$(curl --connect-timeout 2 --max-time "${SWITCHYARD_TIMEOUT_SECONDS:-180}" -fsS -X POST \
+    "${app_url}/api/switchyard/diagnostics/${scenario}")"; then
+    fail "Switchyard ${scenario} diagnostic request"
+    return
+  fi
+  if printf '%s' "$response" | python3 -c \
+    'import json,sys; expected=sys.argv[1]; payload=json.load(sys.stdin); raise SystemExit(0 if payload.get("selected_model") == expected and payload.get("decision_sources") else 1)' \
+    "$expected_model"; then
+    pass "Switchyard ${scenario} routes to ${expected_model} with an official decision source"
+  else
+    fail "Switchyard ${scenario} did not select ${expected_model} with routing evidence"
+  fi
+}
+
 app_url="http://127.0.0.1:${APP_PORT:-8000}"
+switchyard_url="${SWITCHYARD_BASE_URL:-http://127.0.0.1:4000}"
+switchyard_url="${switchyard_url%/}"
+[[ "$switchyard_url" == */v1 ]] && switchyard_url="${switchyard_url%/v1}"
 llm_url="$(openai_base_url "${LLM_BASE_URL:-http://127.0.0.1:8001/v1}")"
 vision_url="$(openai_base_url "${VISION_BASE_URL:-http://127.0.0.1:8002/v1}")"
 nemo_url="$(openai_base_url "${NEMO_AGENT_BASE_URL:-http://127.0.0.1:8010/v1}")"
@@ -91,7 +112,11 @@ check_health "Text vLLM" "${llm_url%/v1}/health"
 check_model "Text vLLM" "${llm_url}/models" "${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}" "${LLM_API_KEY:-}"
 check_health "Vision vLLM" "${vision_url%/v1}/health"
 check_model "Vision vLLM" "${vision_url}/models" "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}" "${VISION_API_KEY:-${LLM_API_KEY:-}}"
+check_health "Switchyard" "${switchyard_url}/health"
+check_model "Switchyard route" "${switchyard_url}/v1/models" "${SWITCHYARD_MODEL:-switchyard/exitwatch-stage}" "${SWITCHYARD_API_KEY:-}"
 check_health "NeMo Agent Toolkit" "${nemo_url%/v1}/health"
+check_switchyard_route "routine" "${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+check_switchyard_route "critical" "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}"
 check_nemo_tool_call
 
 if (( failures > 0 )); then

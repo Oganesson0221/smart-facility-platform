@@ -29,8 +29,6 @@ if [[ -z "${vllm_bin:-}" ]]; then
   exit 1
 fi
 
-export HF_TOKEN="${HF_TOKEN:-${VISION_API_KEY:-${LLM_API_KEY:-}}}"
-
 if [[ "${ALLOW_HF_OFFLINE:-false}" != "true" ]]; then
   unset HF_HUB_OFFLINE
   unset TRANSFORMERS_OFFLINE
@@ -51,10 +49,11 @@ fi
 api_key="${VISION_API_KEY:-${LLM_API_KEY:-}}"
 mm_limit_per_prompt="${VISION_MM_LIMIT_PER_PROMPT:-{\"image\":1}}"
 max_model_len="${VISION_MAX_MODEL_LEN:-8192}"
-gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.45}"
+gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.25}"
 max_num_seqs="${VISION_MAX_NUM_SEQS:-8}"
 max_num_batched_tokens="${VISION_MAX_NUM_BATCHED_TOKENS:-32768}"
 reasoning_parser="${VISION_REASONING_PARSER:-nemotron_v3}"
+tool_call_parser="${VISION_TOOL_CALL_PARSER:-qwen3_coder}"
 kv_cache_dtype="${VISION_KV_CACHE_DTYPE:-fp8}"
 moe_backend="${VISION_MOE_BACKEND:-}"
 
@@ -90,6 +89,8 @@ if [[ "${served_model_name,,}" == *"nemotron"* || "${model_source,,}" == *"nemot
   [[ -n "${max_num_seqs}" ]] && args+=(--max-num-seqs "$max_num_seqs")
   [[ -n "${max_num_batched_tokens}" ]] && args+=(--max-num-batched-tokens "$max_num_batched_tokens")
   [[ -n "${reasoning_parser}" ]] && args+=(--reasoning-parser "$reasoning_parser")
+  args+=(--enable-auto-tool-choice)
+  [[ -n "${tool_call_parser}" ]] && args+=(--tool-call-parser "$tool_call_parser")
   [[ -n "${kv_cache_dtype}" ]] && args+=(--kv-cache-dtype "$kv_cache_dtype")
 fi
 

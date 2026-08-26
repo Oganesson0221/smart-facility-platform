@@ -53,6 +53,7 @@ stop_service() {
 # Stop consumers before their model dependencies.
 stop_service "app"
 stop_service "nemo-agent"
+stop_service "switchyard"
 stop_service "vision-vllm"
 stop_service "text-vllm"
 

@@ -53,6 +53,8 @@ from app.services.telegram import (
     subscriber_chat_ids,
     telegram_api_status,
 )
+from app.services.switchyard_client import SwitchyardClient
+from app.services.switchyard_client import SwitchyardError
 
 
 router = APIRouter(prefix="/api")
@@ -143,9 +145,10 @@ async def health(db: Session = Depends(get_db)):
         detector_name = get_detector().name
     except Exception as exc:
         detector_status = str(exc)
-    llm_status = await llm_runtime_status()
-    vision_status = await vision_runtime_status()
-    nemo_status = await nemo_agent_runtime_status()
+    llm_status, vision_status, nemo_status, switchyard_runtime = await asyncio.gather(
+        llm_runtime_status(), vision_runtime_status(), nemo_agent_runtime_status(),
+        SwitchyardClient().status(),
+    )
     sam_status = segmenter_runtime_status()
     if (
         settings.sam_enabled
@@ -184,6 +187,7 @@ async def health(db: Session = Depends(get_db)):
             "base_url": settings.nemo_agent_base_url,
             **nemo_status,
         },
+        "switchyard": switchyard_runtime,
         "vision": {
             "enabled": settings.vision_enabled,
             "model": settings.vision_model,
@@ -202,6 +206,38 @@ async def health(db: Session = Depends(get_db)):
             latest_incident.telegram_status if latest_incident else "no_incidents"
         ),
         "time": datetime.now(timezone.utc),
+    }
+
+
+@router.get("/switchyard/status")
+async def switchyard_status():
+    return await SwitchyardClient().status()
+
+
+@router.post("/switchyard/diagnostics/{scenario}")
+async def run_switchyard_diagnostic(scenario: str):
+    if scenario not in {"routine", "exploration", "critical"}:
+        raise HTTPException(
+            422,
+            "scenario must be one of: routine, exploration, critical",
+        )
+    try:
+        result = await SwitchyardClient().diagnose(scenario)
+    except SwitchyardError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    choices = result.payload.get("choices", [])
+    content = ""
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        message = choices[0].get("message", {})
+        if isinstance(message, dict):
+            content = str(message.get("content") or "")
+    return {
+        "scenario": scenario,
+        "route": settings.switchyard_model,
+        "selected_model": result.selected_model,
+        "decision_sources": list(result.decision_sources),
+        "latency_ms": round(result.latency_ms, 1),
+        "response_preview": content[:240],
     }
 
 

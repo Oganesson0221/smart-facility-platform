@@ -10,6 +10,7 @@ runtime_dir="${STACK_RUNTIME_DIR:-$(pwd)/.runtime}"
 log_dir="${STACK_LOG_DIR:-$(pwd)/logs}"
 mkdir -p "$runtime_dir" "$log_dir"
 
+switchyard_port="${SWITCHYARD_PORT:-4000}"
 llm_port="${LLM_VLLM_PORT:-8001}"
 vision_port="${VISION_VLLM_PORT:-8002}"
 nemo_port="${NEMO_AGENT_PORT:-8010}"
@@ -99,11 +100,22 @@ start_service() {
 echo "Starting Smart Facility Platform"
 start_service "text-vllm" "http://127.0.0.1:${llm_port}/health" "${TEXT_START_TIMEOUT:-900}" ./scripts/run-vllm-llm.sh
 start_service "vision-vllm" "http://127.0.0.1:${vision_port}/health" "${VISION_START_TIMEOUT:-1200}" ./scripts/run-vllm-vision.sh
+if [[ "${SWITCHYARD_ENABLED:-true}" == "true" ]]; then
+  start_service "switchyard" "http://127.0.0.1:${switchyard_port}/health" "${SWITCHYARD_START_TIMEOUT:-60}" ./scripts/run-switchyard.sh
+fi
 start_service "nemo-agent" "http://127.0.0.1:${nemo_port}/health" "${NEMO_START_TIMEOUT:-180}" ./scripts/run-nemo-agent.sh
-start_service "app" "http://127.0.0.1:${app_port}/api/health" "${APP_START_TIMEOUT:-180}" ./scripts/run.sh
+if [[ "${START_APP:-true}" == "true" ]]; then
+  start_service "app" "http://127.0.0.1:${app_port}/api/health" "${APP_START_TIMEOUT:-180}" ./scripts/run.sh
+else
+  echo "[skip] app (START_APP=false)"
+fi
 
 echo
-echo "Smart Facility Platform is ready: http://127.0.0.1:${app_port}"
+if [[ "${START_APP:-true}" == "true" ]]; then
+  echo "Smart Facility Platform is ready: http://127.0.0.1:${app_port}"
+else
+  echo "Local AI services are ready; start the FastAPI app separately on port ${app_port}."
+fi
 echo "Logs: $log_dir"
 echo "Stop: ./scripts/stop-all.sh"
 

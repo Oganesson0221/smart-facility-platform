@@ -113,7 +113,7 @@ p { line-height: 1.6; }
 .runtime-disclosure[open] .runtime-summary-action::after { content: " −"; }
 .runtime-strip {
   min-height: 72px; margin: 0; padding: 0 12px 12px; display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch;
+  grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch;
   gap: 10px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
 }
 .runtime-kicker, .runtime-node small {
@@ -121,7 +121,7 @@ p { line-height: 1.6; }
 }
 .runtime-node {
   display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 12px 13px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset);
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); text-decoration: none;
 }
 .runtime-node div { display: grid; gap: 3px; }
 .runtime-node strong { color: var(--text); font-size: 12px; font-weight: 600; }

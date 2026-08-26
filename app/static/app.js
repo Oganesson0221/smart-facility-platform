@@ -501,6 +501,8 @@ async function loadHealth() {
     const visionModelAvailable = health.vision?.model_available !== false;
     const nemoEnabled = Boolean(health.nemo_agent?.enabled);
     const nemoReachable = Boolean(health.nemo_agent?.reachable);
+    const switchyardEnabled = Boolean(health.switchyard?.enabled);
+    const switchyardReachable = Boolean(health.switchyard?.reachable);
     const telegramConfigured = Boolean(health.telegram_configured);
     $("#systemText").textContent = visionEnabled
       ? `${health.vision.model} · local stack`
@@ -521,6 +523,15 @@ async function loadHealth() {
     } else {
       setRuntimeNode("#agentRuntime", "NeMo online", health.nemo_agent.model);
     }
+    if (!switchyardEnabled) {
+      setRuntimeNode("#switchyardRuntime", "Routing disabled", "NeMo uses its configured model directly", "warning");
+    } else if (!switchyardReachable) {
+      setRuntimeNode("#switchyardRuntime", "Switchyard offline", compactDetail(health.switchyard?.detail), "warning");
+    } else if (health.switchyard?.route_available === false) {
+      setRuntimeNode("#switchyardRuntime", "Route missing", compactDetail(health.switchyard?.detail), "warning");
+    } else {
+      setRuntimeNode("#switchyardRuntime", "Stage Router online", health.switchyard.route);
+    }
     if (!telegramConfigured) {
       setRuntimeNode("#telegramRuntime", "Alerting optional", "Telegram not configured", "warning");
     } else {
@@ -532,6 +543,7 @@ async function loadHealth() {
     }
     const runtimeIssues = [
       visionEnabled && (!visionReachable || !visionModelAvailable),
+      switchyardEnabled && !switchyardReachable,
       nemoEnabled && !nemoReachable,
       !telegramConfigured,
     ].filter(Boolean).length;
@@ -539,7 +551,7 @@ async function loadHealth() {
     runtimeDisclosure.classList.toggle("warning", runtimeIssues > 0);
     $("#runtimeSummaryText").textContent = runtimeIssues
       ? `${runtimeIssues} service${runtimeIssues === 1 ? "" : "s"} need attention`
-      : "All three services ready";
+      : "All four services ready";
     $("#detectorName").textContent = health.detector === "yolo"
       ? health.sam?.enabled ? "Ultralytics YOLO + SAM 2" : "Ultralytics YOLO"
       : health.detector === "grounding_dino"
@@ -556,7 +568,7 @@ async function loadHealth() {
           : "Zero-download test provider. Switch DETECTOR_PROVIDER for GPU inference.";
     $("#llmName").textContent = health.nemo_agent?.enabled
       ? health.nemo_agent?.reachable
-        ? `${health.llm.model} · NeMo agent`
+        ? `${health.switchyard?.route || health.llm.model} · NeMo agent`
         : "NeMo unavailable"
       : health.llm.enabled ? health.llm.model : "Deterministic fallback";
     $("#llmStatus").textContent = health.nemo_agent?.enabled
@@ -576,6 +588,7 @@ async function loadHealth() {
   } catch (error) {
     $("#systemText").textContent = "API unavailable";
     $("#runtimeSummaryText").textContent = "Status unavailable";
+    setRuntimeNode("#switchyardRuntime", "Health unavailable", "Could not load routing status", "warning");
     $(".runtime-disclosure").classList.add("warning");
     setRuntimeNode("#visionRuntime", "Health unavailable", "Could not load runtime status", "warning");
     setRuntimeNode("#agentRuntime", "Health unavailable", "Could not load runtime status", "warning");

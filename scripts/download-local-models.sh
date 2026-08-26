@@ -32,8 +32,6 @@ fi
 cache_dir="${MODEL_CACHE_DIR:-$(pwd)/models}"
 mkdir -p "$cache_dir"
 
-export HF_TOKEN="${HF_TOKEN:-${VISION_API_KEY:-${LLM_API_KEY:-}}}"
-
 if [[ "${ALLOW_HF_OFFLINE:-false}" != "true" ]]; then
   unset HF_HUB_OFFLINE
   unset TRANSFORMERS_OFFLINE

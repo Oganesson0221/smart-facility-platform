@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f7fa">
+  <title>AI Routing · Smart Facility</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css?v=enterprise-v4">
+  <link rel="stylesheet" href="/static/switchyard.css?v=1">
+</head>
+<body class="routing-page">
+  <main class="routing-shell">
+    <header class="routing-header">
+      <div>
+        <a class="back-link" href="/">← Smart Facility dashboard</a>
+        <p class="eyebrow mint">NVIDIA NeMo Switchyard</p>
+        <h1>AI routing</h1>
+        <p class="routing-intro">Live Stage Router health, target availability, and official routing decisions.</p>
+      </div>
+      <button class="button primary" id="refreshRouting">Refresh status</button>
+    </header>
+
+    <div class="routing-notice">
+      <strong>Advisory system</strong>
+      <span>Routing changes which local model reasons about a request. It never performs physical facility actions.</span>
+    </div>
+
+    <section class="routing-grid" aria-label="Routing runtime status">
+      <article class="routing-card" id="switchyardCard">
+        <span class="routing-status-dot"></span>
+        <small>ROUTER</small>
+        <h2 id="switchyardState">Checking Switchyard</h2>
+        <p id="switchyardDetail">Waiting for the local proxy.</p>
+      </article>
+      <article class="routing-card" id="efficientCard">
+        <span class="routing-status-dot"></span>
+        <small>EFFICIENT TARGET</small>
+        <h2 id="efficientState">Checking Qwen</h2>
+        <p id="efficientDetail">Routine and settled work.</p>
+      </article>
+      <article class="routing-card" id="capableCard">
+        <span class="routing-status-dot"></span>
+        <small>CAPABLE TARGET</small>
+        <h2 id="capableState">Checking Nemotron</h2>
+        <p id="capableDetail">Exploration and error recovery.</p>
+      </article>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Current deployment</p><h2>Stage Router</h2></div>
+        <span class="route-pill" id="routeId">Loading route</span>
+      </div>
+      <div class="routing-facts">
+        <div><small>PICKER</small><strong>efficient_first</strong></div>
+        <div><small>CONFIDENCE</small><strong>0.5</strong></div>
+        <div><small>LATEST MODEL</small><strong id="latestModel">No routed request yet</strong></div>
+        <div><small>LATEST TIER</small><strong id="latestTier">—</strong></div>
+      </div>
+      <p class="latest-time" id="latestTime">Routing records appear after a completed request.</p>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Live verification</p><h2>Exercise Stage Router signals</h2></div>
+      </div>
+      <p class="panel-copy">Each check sends a real request through the running official server. The selected model is read from <code>x-model-router-selected-model</code>; the decision source is read from the official stats delta.</p>
+      <div class="diagnostic-actions">
+        <button class="button ghost diagnostic" data-scenario="routine">Routine / settled</button>
+        <button class="button ghost diagnostic" data-scenario="exploration">Exploration / error</button>
+        <button class="button ghost diagnostic" data-scenario="critical">Critical error</button>
+      </div>
+      <div class="diagnostic-output" id="diagnosticOutput" aria-live="polite">Choose a scenario to run a routed request.</div>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Official statistics</p><h2>Decision sources</h2></div>
+      </div>
+      <div class="decision-list" id="decisionList"><p>No routing decisions recorded yet.</p></div>
+    </section>
+  </main>
+  <script src="/static/switchyard.js?v=1"></script>
+</body>
+</html>

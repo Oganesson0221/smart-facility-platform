@@ -9,6 +9,7 @@ from app.services.openai_compat import coerce_text_content
 from app.services.openai_compat import extract_chat_message_content
 from app.services.openai_compat import list_models
 from app.services.sop import SOPResult
+from app.services.switchyard_client import routed_text_completion
 
 
 LOGGER = logging.getLogger(__name__)
@@ -198,6 +199,19 @@ def _fallback_telegram_answer(
     )
 
 
+async def _text_completion(**kwargs):
+    if settings.switchyard_enabled:
+        routed = await routed_text_completion(**kwargs)
+        return routed.payload
+    return await chat_completions(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        timeout_seconds=settings.llm_timeout_seconds,
+        model=settings.llm_model,
+        **kwargs,
+    )
+
+
 async def create_grounded_summary_direct(
     incident: dict,
     sops: list[SOPResult],
@@ -213,11 +227,7 @@ async def create_grounded_summary_direct(
         return fallback
 
     try:
-        payload = await chat_completions(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            timeout_seconds=settings.llm_timeout_seconds,
-            model=settings.llm_model,
+        payload = await _text_completion(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
@@ -257,11 +267,7 @@ async def answer_sop_question_direct(
         return fallback
 
     try:
-        payload = await chat_completions(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            timeout_seconds=settings.llm_timeout_seconds,
-            model=settings.llm_model,
+        payload = await _text_completion(
             messages=[
                 {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
                 {"role": "user", "content": user_content},

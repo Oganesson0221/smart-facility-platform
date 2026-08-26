@@ -38,6 +38,6 @@ fi
 
 echo "Local AI runtime bootstrap complete."
 echo "Next:"
-echo "  1. ./scripts/run-vllm-llm.sh"
-echo "  2. ./scripts/run-vllm-vision.sh"
-echo "  3. ./scripts/run-nemo-agent.sh"
+echo "  1. ./scripts/setup-switchyard.sh"
+echo "  2. ./scripts/download-local-models.sh"
+echo "  3. ./scripts/start-all.sh"

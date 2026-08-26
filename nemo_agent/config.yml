@@ -13,9 +13,11 @@ functions:
 llms:
   local_facility_llm:
     _type: openai
-    api_key: ${LLM_API_KEY:-EMPTY}
-    base_url: ${LLM_BASE_URL:-http://127.0.0.1:8001/v1}
-    model_name: ${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+    # run-nemo-agent.sh points these at Switchyard when routing is enabled and
+    # directly at Qwen when it is explicitly disabled.
+    api_key: ${NAT_LLM_API_KEY:-EMPTY}
+    base_url: ${NAT_LLM_BASE_URL:-http://127.0.0.1:4000/v1}
+    model_name: ${NAT_LLM_MODEL:-switchyard/exitwatch-stage}
     temperature: 0.1
 
 workflow:
