@@ -25,7 +25,7 @@ vllm_bin="$(find_vllm || true)"
 if [[ -z "${vllm_bin:-}" ]]; then
   echo "No vLLM binary was found."
   echo "Install vllm in .nemo-venv, .venv, or ~/.local/bin, or set VLLM_BIN explicitly."
-  echo "Recommended fix: ./scripts/setup-local-ai-runtime.sh"
+  echo "Recommended fix: ./scripts/setup.sh"
   exit 1
 fi
 
@@ -49,7 +49,7 @@ fi
 api_key="${VISION_API_KEY:-${LLM_API_KEY:-}}"
 mm_limit_per_prompt="${VISION_MM_LIMIT_PER_PROMPT:-{\"image\":1}}"
 max_model_len="${VISION_MAX_MODEL_LEN:-8192}"
-gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.25}"
+gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.45}"
 max_num_seqs="${VISION_MAX_NUM_SEQS:-8}"
 max_num_batched_tokens="${VISION_MAX_NUM_BATCHED_TOKENS:-32768}"
 reasoning_parser="${VISION_REASONING_PARSER:-nemotron_v3}"

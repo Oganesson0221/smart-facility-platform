@@ -184,6 +184,42 @@ class SwitchyardClient:
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
 
+    async def _proxy_json(self, path: str) -> dict[str, Any]:
+        try:
+            return await self._get_json(path)
+        except httpx.HTTPStatusError as exc:
+            raise SwitchyardError(
+                f"Switchyard returned HTTP {exc.response.status_code} for {path}"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise SwitchyardError(
+                f"Switchyard is unavailable at {self.base_url}: {exc}"
+            ) from exc
+
+    async def models(self) -> dict[str, Any]:
+        return await self._proxy_json("/v1/models")
+
+    async def stats(self) -> dict[str, Any]:
+        return await self._proxy_json("/v1/stats")
+
+    async def metrics(self) -> str:
+        try:
+            async with self._client() as client:
+                response = await client.get(
+                    f"{self.base_url}/metrics",
+                    headers=build_headers(self.api_key),
+                )
+                response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as exc:
+            raise SwitchyardError(
+                f"Switchyard returned HTTP {exc.response.status_code} for /metrics"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise SwitchyardError(
+                f"Switchyard is unavailable at {self.base_url}: {exc}"
+            ) from exc
+
     async def health(self) -> dict[str, Any]:
         try:
             async with self._client(min(8.0, self.timeout_seconds)) as client:

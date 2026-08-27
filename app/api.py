@@ -52,6 +52,7 @@ from app.services.telegram import (
     send_incident_alert,
     subscriber_chat_ids,
     telegram_api_status,
+    telegram_polling_status,
 )
 from app.services.switchyard_client import SwitchyardClient
 from app.services.switchyard_client import SwitchyardError
@@ -202,6 +203,7 @@ async def health(db: Session = Depends(get_db)):
             .where(TelegramSubscriber.active.is_(True))
         ),
         "telegram_recipients": len(recipients),
+        "telegram_polling": telegram_polling_status(),
         "telegram_delivery": (
             latest_incident.telegram_status if latest_incident else "no_incidents"
         ),
@@ -211,7 +213,40 @@ async def health(db: Session = Depends(get_db)):
 
 @router.get("/switchyard/status")
 async def switchyard_status():
-    return await SwitchyardClient().status()
+    status = await SwitchyardClient().status()
+    status["application_routing"] = {
+        "telegram_query_model": settings.telegram_query_model or settings.llm_model,
+        "telegram_query_route": "pinned_qwen_rag",
+        "vision_iou_threshold": settings.vision_validation_iou_threshold,
+        "high_iou_action": "deterministic_sop_and_telegram",
+        "low_iou_action": "nemotron_vision_validation",
+    }
+    return status
+
+
+@router.get("/switchyard/models")
+async def switchyard_models():
+    try:
+        return await SwitchyardClient().models()
+    except SwitchyardError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.get("/switchyard/stats")
+async def switchyard_stats():
+    try:
+        return await SwitchyardClient().stats()
+    except SwitchyardError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.get("/switchyard/metrics", response_class=Response)
+async def switchyard_metrics():
+    try:
+        metrics = await SwitchyardClient().metrics()
+    except SwitchyardError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(content=metrics, media_type="text/plain; version=0.0.4")
 
 
 @router.post("/switchyard/diagnostics/{scenario}")
@@ -531,7 +566,10 @@ async def telegram_status(db: Session = Depends(get_db)):
         "configured": is_configured(),
         "recipients": len(subscriber_chat_ids(db)),
         "polling_enabled": settings.telegram_polling_enabled,
+        "polling": telegram_polling_status(),
         "bot_username": api_status.get("bot_username") or settings.telegram_bot_username,
+        "query_model": settings.telegram_query_model or settings.llm_model,
+        "query_route": "pinned_qwen_rag",
         "message": (
             f"Send /start to @{settings.telegram_bot_username} to subscribe. "
             "USER_ID and TELEGRAM_ALERT_CHAT_ID are also accepted as recipients."

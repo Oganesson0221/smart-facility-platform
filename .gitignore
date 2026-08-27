@@ -19,6 +19,7 @@ evidence/*
 lab_outputs/*
 !lab_outputs/.gitkeep
 *.log
+logs/
 
 # Local AI models / weights
 models/nvidia/

@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 import re
 
 import httpx
@@ -12,6 +13,29 @@ from app.config import ROOT, settings
 from app.models import Incident, TelegramSubscriber
 from app.services.llm import answer_sop_question
 from app.services.sop import load_telegram_sop_reference, search_sops
+
+
+LOGGER = logging.getLogger(__name__)
+_POLLING_STATE: dict[str, object] = {
+    "status": "not_started",
+    "last_error": None,
+    "consecutive_failures": 0,
+}
+
+
+def _telegram_api_root() -> str:
+    return settings.telegram_api_base_url.rstrip("/")
+
+
+def _telegram_client(timeout: float) -> httpx.AsyncClient:
+    kwargs: dict[str, object] = {"timeout": timeout}
+    if settings.telegram_proxy_url.strip():
+        kwargs["proxy"] = settings.telegram_proxy_url.strip()
+    return httpx.AsyncClient(**kwargs)
+
+
+def telegram_polling_status() -> dict[str, object]:
+    return dict(_POLLING_STATE)
 
 
 def is_configured() -> bool:
@@ -59,9 +83,9 @@ def subscriber_chat_ids(db: Session) -> list[str]:
 async def telegram_api_status() -> dict:
     if not is_configured():
         return {"reachable": False, "detail": "Bot token is not configured"}
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/getMe"
+    url = f"{_telegram_api_root()}/bot{settings.telegram_bot_token}/getMe"
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with _telegram_client(timeout=5) as client:
             response = await client.get(url)
             response.raise_for_status()
         result = response.json().get("result") or {}
@@ -69,11 +93,15 @@ async def telegram_api_status() -> dict:
             "reachable": True,
             "detail": "Telegram Bot API is reachable",
             "bot_username": result.get("username"),
+            "api_base_url": _telegram_api_root(),
+            "proxy_configured": bool(settings.telegram_proxy_url.strip()),
         }
     except httpx.HTTPStatusError as exc:
         return {
             "reachable": False,
             "detail": f"Telegram returned HTTP {exc.response.status_code}",
+            "api_base_url": _telegram_api_root(),
+            "proxy_configured": bool(settings.telegram_proxy_url.strip()),
         }
     except httpx.ConnectError:
         return {
@@ -170,12 +198,28 @@ def _vision_validation_description(metadata: dict) -> str:
         return "disabled"
     if mode == "unavailable":
         return "unavailable; deterministic CV decision used"
+    if mode == "deterministic_iou":
+        iou = validation.get("iou", validation.get("confidence"))
+        threshold = validation.get("threshold")
+        threshold_text = (
+            f" met the {_format_percent(threshold)} threshold"
+            if threshold is not None
+            else " met the direct-alert threshold"
+        )
+        return f"direct alert; SAM IoU {_format_percent(iou)}{threshold_text}"
     confirmed = validation.get("confirmed")
     if confirmed is None:
         return "not recorded"
     confidence = validation.get("confidence")
     suffix = f" at {_format_percent(confidence)} confidence" if confidence is not None else ""
     return f"{'confirmed' if bool(confirmed) else 'rejected'}{suffix}"
+
+
+def _vision_validation_label(metadata: dict) -> str:
+    validation = metadata.get("vision_validation") or {}
+    if isinstance(validation, dict) and validation.get("mode") == "deterministic_iou":
+        return "IoU gate"
+    return "Nemotron review"
 
 
 def _incident_detail_answer(incident: Incident) -> str:
@@ -198,7 +242,7 @@ def _incident_detail_answer(incident: Incident) -> str:
         f"Object inside zone: {_format_percent(metadata.get('object_intrusion_ratio', incident.overlap))}\n"
         f"Exit area blocked: {_format_percent(metadata.get('exit_blockage_ratio'))}\n"
         f"Segmentation: {'SAM mask' if metadata.get('spatial_method') == 'sam_mask' else 'YOLO box'}\n"
-        f"Nemotron review: {_vision_validation_description(metadata)}\n"
+        f"{_vision_validation_label(metadata)}: {_vision_validation_description(metadata)}\n"
         f"Duration: {duration_text}\n"
         f"Status: {incident.status.replace('_', ' ')}"
     )
@@ -310,7 +354,7 @@ def _answer_known_incident_question(
     if _contains_any(normalized, ("confidence", "confident", "how sure", "certain", "accurate")):
         return (
             f"YOLO confidence for {incident.id} is {incident.confidence:.0%}. "
-            f"Nemotron review: {_vision_validation_description(metadata)}."
+            f"{_vision_validation_label(metadata)}: {_vision_validation_description(metadata)}."
         )
 
     if _contains_any(normalized, ("when", "what time", "how long", "duration")):
@@ -640,7 +684,7 @@ def _alert_text(incident) -> str:
         f"Exit area blocked: {blockage:.0%}\n"
         f"Blocked duration: {duration_text}\n"
         f"Segmentation method: {method_label}\n"
-        f"Nemotron review: {_vision_validation_description(metadata)}\n"
+        f"{_vision_validation_label(metadata)}: {_vision_validation_description(metadata)}\n"
         f"Violation: {incident.summary}\n"
         f"Incident: {incident.id}\n\n"
         f"Recommended first action: {first_action}\n\n"
@@ -688,7 +732,7 @@ def _alert_caption(incident, limit: int = 900) -> str:
         f"Exit area blocked: {blockage:.0%}",
         f"Blocked duration: {duration_text}",
         f"Segmentation: {method_label}",
-        f"Nemotron review: {_vision_validation_description(metadata)}",
+        f"{_vision_validation_label(metadata)}: {_vision_validation_description(metadata)}",
         f"First action: {first_action}",
     ]
     caption = "\n".join(lines)
@@ -701,7 +745,7 @@ async def _send_to_chat(
     incident,
     evidence: Path | None,
 ) -> str:
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
+    url = f"{_telegram_api_root()}/bot{settings.telegram_bot_token}"
     data = {
         "chat_id": chat_id,
         "reply_markup": json.dumps(_keyboard(incident.id)),
@@ -750,7 +794,7 @@ async def send_incident_alert(
     message_ids: dict[str, str] = {}
     failures: list[str] = []
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with _telegram_client(timeout=30) as client:
             for chat_id in targets:
                 try:
                     message_ids[chat_id] = await _send_to_chat(
@@ -783,22 +827,29 @@ async def send_incident_alert(
 async def send_bot_message(chat_id: str, text: str) -> None:
     if not is_configured() or not str(text or "").strip():
         return
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+    url = f"{_telegram_api_root()}/bot{settings.telegram_bot_token}/sendMessage"
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(url, json={"chat_id": chat_id, "text": text})
-    except httpx.HTTPError:
+        async with _telegram_client(timeout=15) as client:
+            response = await client.post(url, json={"chat_id": chat_id, "text": text})
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        LOGGER.warning("Telegram reply failed chat_id=%s error=%s", chat_id, exc)
         return
 
 
 async def answer_callback(callback_id: str, text: str):
     if not settings.telegram_bot_token:
         return
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/answerCallbackQuery"
+    url = f"{_telegram_api_root()}/bot{settings.telegram_bot_token}/answerCallbackQuery"
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(url, json={"callback_query_id": callback_id, "text": text})
-    except httpx.HTTPError:
+        async with _telegram_client(timeout=15) as client:
+            response = await client.post(
+                url,
+                json={"callback_query_id": callback_id, "text": text},
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        LOGGER.warning("Telegram callback reply failed error=%s", exc)
         return
 
 
@@ -841,18 +892,33 @@ async def _process_polled_update(update: dict) -> None:
 
 async def poll_telegram_updates() -> None:
     if not (is_configured() and settings.telegram_polling_enabled):
+        _POLLING_STATE.update(status="disabled", last_error=None, consecutive_failures=0)
         return
-    base_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
+    base_url = f"{_telegram_api_root()}/bot{settings.telegram_bot_token}"
     offset: int | None = None
+    retry_seconds = 5
+    LOGGER.info(
+        "Telegram polling starting api_base_url=%s proxy_configured=%s",
+        _telegram_api_root(),
+        bool(settings.telegram_proxy_url.strip()),
+    )
     while True:
         try:
-            async with httpx.AsyncClient(
+            _POLLING_STATE["status"] = "connecting"
+            async with _telegram_client(
                 timeout=settings.telegram_poll_timeout_seconds + 10
             ) as client:
-                await client.post(
+                delete_response = await client.post(
                     f"{base_url}/deleteWebhook",
                     json={"drop_pending_updates": False},
                 )
+                delete_response.raise_for_status()
+                _POLLING_STATE.update(
+                    status="polling",
+                    last_error=None,
+                    consecutive_failures=0,
+                )
+                retry_seconds = 5
                 while True:
                     response = await client.get(
                         f"{base_url}/getUpdates",
@@ -866,6 +932,20 @@ async def poll_telegram_updates() -> None:
                         offset = int(update["update_id"]) + 1
                         await _process_polled_update(update)
         except asyncio.CancelledError:
+            _POLLING_STATE["status"] = "stopped"
             raise
-        except (httpx.HTTPError, KeyError, TypeError, ValueError):
-            await asyncio.sleep(5)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            failures = int(_POLLING_STATE.get("consecutive_failures") or 0) + 1
+            detail = f"{type(exc).__name__}: {str(exc) or 'Telegram polling failed'}"
+            _POLLING_STATE.update(
+                status="retrying",
+                last_error=detail[:240],
+                consecutive_failures=failures,
+            )
+            LOGGER.warning(
+                "Telegram polling unavailable; retrying in %ss error=%s",
+                retry_seconds,
+                detail,
+            )
+            await asyncio.sleep(retry_seconds)
+            retry_seconds = min(60, retry_seconds * 2)

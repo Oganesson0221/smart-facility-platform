@@ -11,13 +11,31 @@ fi
 # Pin the reviewed upstream revision because Switchyard is explicitly pre-alpha.
 # This revision includes Stage Router decision-source projection in /v1/stats.
 switchyard_rev="${SWITCHYARD_GIT_REV:-574e0cdb1016923091ecf4d15e458ee922d0f189}"
-cargo install --locked --force \
-  --git https://github.com/NVIDIA-NeMo/Switchyard.git \
-  --rev "$switchyard_rev" switchyard-server
-
+state_file="${SWITCHYARD_INSTALL_STATE:-.runtime/switchyard-revision}"
 server_bin="$(command -v switchyard-server 2>/dev/null || true)"
 if [[ -z "$server_bin" && -x "$HOME/.cargo/bin/switchyard-server" ]]; then
   server_bin="$HOME/.cargo/bin/switchyard-server"
+fi
+
+installed_rev=""
+[[ -r "$state_file" ]] && installed_rev="$(<"$state_file")"
+if [[ -n "$server_bin" && "$installed_rev" == "$switchyard_rev" ]]; then
+  echo "Switchyard revision ${switchyard_rev} is already installed."
+else
+  cargo install --locked --force \
+    --git https://github.com/NVIDIA-NeMo/Switchyard.git \
+    --rev "$switchyard_rev" switchyard-server
+  server_bin="$(command -v switchyard-server 2>/dev/null || true)"
+  if [[ -z "$server_bin" && -x "$HOME/.cargo/bin/switchyard-server" ]]; then
+    server_bin="$HOME/.cargo/bin/switchyard-server"
+  fi
+  mkdir -p "$(dirname "$state_file")"
+  printf '%s\n' "$switchyard_rev" >"$state_file"
+fi
+
+if [[ -z "$server_bin" ]]; then
+  echo "Cargo completed but switchyard-server was not found in PATH or ~/.cargo/bin." >&2
+  exit 1
 fi
 
 "$server_bin" --help >/dev/null

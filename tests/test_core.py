@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import cv2
 import httpx
@@ -14,6 +14,7 @@ import numpy as np
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.database import Base
 from app.models import AnalysisJob, Camera, Incident
 from app.services.cv.annotator import annotate, annotate_scene
@@ -39,13 +40,16 @@ from app.services.cv.roi_engine import (
 )
 from app.services.cv.tracker import IoUTracker
 from app.services.cv.types import Detection, Obstruction, SegmentationResult
+from app.services.agent import enrich_and_notify
 from app.services.llm import llm_runtime_status
 from app.services.llm import _parse_result
+from app.services.llm import answer_sop_question_direct
 from app.services.llm import create_grounded_summary
 from app.services.llm import SYSTEM_PROMPT
 from app.services.llm import TELEGRAM_ASSISTANT_PROMPT
 from app.services.nemo_agent_client import _parse_json_content
 from app.services.processing import (
+    _confirm_fire_exit_candidate,
     _crop_validation_region,
     _evaluate_obstructions,
     _prepare_validation_image,
@@ -60,6 +64,7 @@ from app.services.processing import (
 )
 from app.services.scene_reasoning import (
     _build_fire_exit_validation_prompt,
+    _call_vision_model,
     _extract_chat_content,
     _parse_assessment,
     _parse_fire_exit_validation,
@@ -480,6 +485,8 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             "app.services.processing.settings.validate_fire_exit_incidents_with_vision",
             validate_result is not None,
         ), patch(
+            "app.services.processing.settings.sam_enabled", False,
+        ), patch(
             "app.services.processing.settings.vision_validation_fail_closed", False
         ):
             if validate_result is None:
@@ -545,6 +552,58 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(incidents), 1)
         self.assertTrue(incidents[0].incident_metadata["vision_validation"]["confirmed"])
 
+    async def test_high_sam_iou_skips_nemotron_validation(self):
+        obstruction = Obstruction(
+            detection=Detection("car", 0.9, (10, 10, 90, 90)),
+            overlap=0.9,
+            object_intrusion_ratio=0.9,
+            exit_blockage_ratio=0.8,
+            is_blocking=True,
+            mask_zone_iou=0.70,
+        )
+        validator = AsyncMock()
+        with patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision",
+            True,
+        ), patch(
+            "app.services.processing.settings.vision_validation_iou_threshold", 0.70
+        ), patch(
+            "app.services.processing.validate_fire_exit_obstruction", validator
+        ):
+            confirmed, validation, crop = await _confirm_fire_exit_candidate(
+                None, self.frames[0], obstruction, self.camera.exit_zone
+            )
+        self.assertTrue(confirmed)
+        self.assertEqual(validation["mode"], "deterministic_iou")
+        self.assertIsNone(crop)
+        validator.assert_not_awaited()
+
+    async def test_low_sam_iou_escalates_to_nemotron(self):
+        obstruction = Obstruction(
+            detection=Detection("car", 0.9, (10, 10, 90, 90)),
+            overlap=0.9,
+            object_intrusion_ratio=0.9,
+            exit_blockage_ratio=0.3,
+            is_blocking=True,
+            mask_zone_iou=0.69,
+        )
+        validator = AsyncMock(return_value={"confirmed": True, "confidence": 0.91})
+        with patch(
+            "app.services.processing.settings.validate_fire_exit_incidents_with_vision",
+            True,
+        ), patch(
+            "app.services.processing.settings.vision_validation_iou_threshold", 0.70
+        ), patch(
+            "app.services.processing.validate_fire_exit_obstruction", validator
+        ):
+            confirmed, validation, crop = await _confirm_fire_exit_candidate(
+                None, self.frames[0], obstruction, self.camera.exit_zone
+            )
+        self.assertTrue(confirmed)
+        self.assertTrue(validation["confirmed"])
+        self.assertIsNotNone(crop)
+        validator.assert_awaited_once()
+
     async def test_nemotron_validation_rejected(self):
         inside = Detection("car", 0.9, (10, 10, 90, 90))
         await self._run_video(
@@ -576,6 +635,8 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "app.services.processing.settings.validate_fire_exit_incidents_with_vision", True
         ), patch(
+            "app.services.processing.settings.sam_enabled", False
+        ), patch(
             "app.services.processing.settings.vision_validation_fail_closed", False
         ), patch(
             "app.services.processing.validate_fire_exit_obstruction",
@@ -602,6 +663,8 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             "app.services.processing.event_hub.broadcast_threadsafe"
         ), patch(
             "app.services.processing.settings.validate_fire_exit_incidents_with_vision", True
+        ), patch(
+            "app.services.processing.settings.sam_enabled", False
         ), patch(
             "app.services.processing.settings.vision_validation_fail_closed", True
         ), patch(
@@ -978,6 +1041,77 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["incidents"], [self._incidents()[0].id])
 
 
+class AgentRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_deterministic_iou_alert_skips_all_llm_generation(self):
+        incident = SimpleNamespace(
+            id="INC-DIRECT",
+            facility="Building A",
+            zone="South Exit",
+            event_type="fire_exit_obstruction",
+            object_type="car",
+            confidence=0.94,
+            overlap=0.82,
+            duration_seconds=0.0,
+            first_seen=datetime.now(timezone.utc),
+            summary="",
+            recommended_action="",
+            incident_metadata={
+                "vision_validation": {
+                    "mode": "deterministic_iou",
+                    "iou": 0.70,
+                    "threshold": 0.70,
+                }
+            },
+        )
+        camera = SimpleNamespace(id="cam-1")
+        db = MagicMock()
+        llm = AsyncMock()
+        fallback = MagicMock(
+            return_value=("Car detected at South Exit.", "Notify Facilities Security.")
+        )
+        sender = AsyncMock(return_value=("sent", "telegram-message"))
+        with patch("app.services.agent.search_sops", return_value=[]), patch(
+            "app.services.agent.create_grounded_summary", llm
+        ), patch(
+            "app.services.agent.create_grounded_summary_fallback", fallback
+        ), patch(
+            "app.services.agent.subscriber_chat_ids", return_value=["operator"]
+        ), patch("app.services.agent.send_incident_alert", sender):
+            result = await enrich_and_notify(db, incident, camera)
+        llm.assert_not_awaited()
+        fallback.assert_called_once()
+        sender.assert_awaited_once_with(incident, ["operator"])
+        self.assertEqual(result.telegram_status, "sent")
+
+
+class LlmRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_telegram_rag_query_is_pinned_to_qwen(self):
+        captured = {}
+
+        async def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {"choices": [{"message": {"content": "Use the local SOP."}}]}
+
+        routed = AsyncMock()
+        with patch("app.services.llm.settings.llm_enabled", True), patch(
+            "app.services.llm.settings.telegram_query_model",
+            "Qwen/Qwen2.5-7B-Instruct",
+        ), patch(
+            "app.services.llm.chat_completions", side_effect=fake_completion
+        ), patch("app.services.llm.routed_text_completion", routed):
+            answer = await answer_sop_question_direct(
+                "What should I do?",
+                None,
+                "sops/reference.txt",
+                "Notify Facilities Security.",
+                [],
+            )
+        self.assertEqual(answer, "Use the local SOP.")
+        self.assertEqual(captured["model"], "Qwen/Qwen2.5-7B-Instruct")
+        self.assertEqual(captured["base_url"], settings.llm_base_url)
+        routed.assert_not_awaited()
+
+
 class ApiFallbackTests(unittest.TestCase):
     def test_image_analysis_without_polygon_helper(self):
         from app.api import analyse_uploaded_image
@@ -1257,6 +1391,35 @@ class SupportServiceTests(unittest.TestCase):
             result = asyncio.run(validate_fire_exit_obstruction(b"image-bytes", object_label="chair"))
         self.assertTrue(result["confirmed"])
         self.assertIn("Primary YOLO object: chair.", call.await_args.args[0])
+
+    def test_vision_call_retries_a_length_truncated_json_response(self):
+        truncated = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": '{"confirmed":true,"summary":"cut'},
+                }
+            ]
+        }
+        complete = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": '{"confirmed":true,"summary":"ok"}'},
+                }
+            ]
+        }
+        with patch(
+            "app.services.scene_reasoning.chat_completions",
+            AsyncMock(side_effect=[truncated, complete]),
+        ) as completion:
+            content = asyncio.run(
+                _call_vision_model("prompt", b"image", max_response_tokens=120)
+            )
+        self.assertEqual(content, '{"confirmed":true,"summary":"ok"}')
+        self.assertEqual(completion.await_count, 2)
+        self.assertEqual(completion.await_args_list[0].kwargs["max_tokens"], 120)
+        self.assertEqual(completion.await_args_list[1].kwargs["max_tokens"], 512)
 
     def test_fire_exit_validation_prompt_is_compact(self):
         prompt = _build_fire_exit_validation_prompt("chair")

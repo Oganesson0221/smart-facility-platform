@@ -7,7 +7,7 @@
   <title>AI Routing · Smart Facility</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css?v=enterprise-v4">
-  <link rel="stylesheet" href="/static/switchyard.css?v=1">
+  <link rel="stylesheet" href="/static/switchyard.css?v=4">
 </head>
 <body class="routing-page">
   <main class="routing-shell">
@@ -63,6 +63,90 @@
 
     <section class="routing-panel">
       <div class="panel-heading">
+        <div><p class="eyebrow">Request architecture</p><h2>Routing and escalation paths</h2></div>
+      </div>
+      <p class="panel-copy">These are separate routes. Switchyard dynamically chooses a model for general orchestration; Telegram questions are pinned to Qwen after local retrieval; camera incidents use a deterministic IoU gate before spending vision tokens.</p>
+      <div class="architecture-diagram" role="img" aria-label="Smart Facility Switchyard request architecture">
+        <div class="architecture-split">
+          <div class="architecture-path counted-path">
+            <div class="path-heading"><span class="path-label">1 · General LLM orchestration</span><span class="accounting-badge switchyard-counted">Switchyard counted</span></div>
+            <div class="architecture-node client-node"><small>REQUEST</small><strong>Dashboard / API / NeMo</strong><span>text reasoning · ports 8000 / 8010</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node switchyard-node"><small>ROUTE</small><strong>switchyard/exitwatch-stage</strong><span>port 4000</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node router-node"><small>STAGE ROUTER</small><strong>efficient_first</strong><span>signals + threshold 0.5</span></div>
+            <span class="architecture-arrow branch-arrow">↗<br>↘</span>
+            <div class="architecture-targets">
+              <div class="architecture-node efficient-node"><small>EFFICIENT</small><strong>Qwen 2.5 7B</strong><span>routine / fall-open · port 8001</span></div>
+              <div class="architecture-node capable-node"><small>CAPABLE</small><strong>Nemotron Omni 30B</strong><span>critical / override · port 8002</span></div>
+            </div>
+          </div>
+          <div class="architecture-path telegram-path">
+            <div class="path-heading"><span class="path-label">2 · Telegram operator question</span><span class="accounting-badge vllm-counted">Qwen vLLM counted</span></div>
+            <div class="architecture-node client-node"><small>PERSON</small><strong>Telegram operator</strong><span>free-text safety question</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node agent-node"><small>BOT HANDLER</small><strong>FastAPI</strong><span>known answers need no model</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node tool-node"><small>LOCAL RAG</small><strong>Incident + SOP retrieval</strong><span>no model tokens</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node efficient-node"><small>PINNED ANSWER MODEL</small><strong id="telegramQueryModel">Qwen 2.5 7B</strong><span>grounded reply · port 8001</span></div>
+          </div>
+          <div class="architecture-path direct-path">
+            <div class="path-heading"><span class="path-label">3 · Camera incident vision gate</span><span class="accounting-badge mixed-counting">Conditional tokens</span></div>
+            <div class="architecture-node client-node"><small>CAMERA / UPLOAD</small><strong>Fire-exit image</strong><span>local evidence frame</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node tool-node"><small>LOCAL TOOLS</small><strong>YOLO + SAM</strong><span>detection and segmentation</span></div>
+            <span class="architecture-arrow">→</span>
+            <div class="architecture-node router-node"><small>IoU GATE</small><strong>SAM mask / exit zone</strong><span>threshold <b id="visionIouThreshold">70%</b></span></div>
+            <span class="architecture-arrow branch-arrow">↗<br>↘</span>
+            <div class="architecture-targets">
+              <div class="architecture-node zero-token-node"><small>IoU ≥ <b class="vision-threshold-copy">70%</b></small><strong>Local SOP + Telegram</strong><span>zero LLM tokens</span></div>
+              <div class="architecture-node capable-node"><small>IoU &lt; <b class="vision-threshold-copy">70%</b> / unavailable</small><strong>Nemotron Omni 30B</strong><span>confirm before incident · port 8002</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="accounting-legend" aria-label="Token accounting boundaries">
+        <div><span class="legend-dot switchyard-dot"></span><strong>Switchyard stats</strong><small>Only lane 1 appears in the table below.</small></div>
+        <div><span class="legend-dot qwen-dot"></span><strong>Qwen vLLM metrics</strong><small>Telegram RAG tokens are measured on port 8001.</small></div>
+        <div><span class="legend-dot vision-dot"></span><strong>Nemotron vLLM metrics</strong><small>Only ambiguous vision calls are measured on port 8002.</small></div>
+      </div>
+      <p class="architecture-note">For lane 1, the selected model is returned in <code>x-model-router-selected-model</code>. Switchyard updates <code>/v1/stats</code>, <code>/metrics</code>, and the routing JSONL only after that routed response completes.</p>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Live accounting</p><h2>Tokens by routed model</h2></div>
+      </div>
+      <div class="usage-summary">
+        <div><small>REQUESTS</small><strong id="usageRequests">0</strong></div>
+        <div><small>TOTAL TOKENS</small><strong id="usageTokens">0</strong></div>
+        <div><small>ROUTING OVERHEAD</small><strong id="usageOverhead">0 ms</strong></div>
+        <div><small>ROUTING ERRORS</small><strong id="usageErrors">0</strong></div>
+      </div>
+      <div class="usage-table-wrap">
+        <table class="usage-table">
+          <thead><tr><th>Model</th><th>Calls</th><th>Request share</th><th>Prompt</th><th>Completion</th><th>Total tokens</th><th>Token share</th><th>Avg latency</th></tr></thead>
+          <tbody id="modelUsageBody"><tr><td colspan="8">Waiting for routing statistics.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="architecture-note">These counters are cumulative since Switchyard started or <code>POST /v1/stats/reset</code> was called.</p>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">API access</p><h2>Browser-safe endpoints</h2></div>
+      </div>
+      <p class="panel-copy">Switchyard is an API-only server, so its root path intentionally has no page. Use these defined endpoints or this dashboard.</p>
+      <div class="endpoint-links">
+        <a class="button ghost" href="/api/switchyard/models" target="_blank" rel="noreferrer">Models JSON</a>
+        <a class="button ghost" href="/api/switchyard/stats" target="_blank" rel="noreferrer">Routing stats JSON</a>
+        <a class="button ghost" href="/api/switchyard/metrics" target="_blank" rel="noreferrer">Prometheus metrics</a>
+      </div>
+    </section>
+
+    <section class="routing-panel">
+      <div class="panel-heading">
         <div><p class="eyebrow">Live verification</p><h2>Exercise Stage Router signals</h2></div>
       </div>
       <p class="panel-copy">Each check sends a real request through the running official server. The selected model is read from <code>x-model-router-selected-model</code>; the decision source is read from the official stats delta.</p>
@@ -81,6 +165,6 @@
       <div class="decision-list" id="decisionList"><p>No routing decisions recorded yet.</p></div>
     </section>
   </main>
-  <script src="/static/switchyard.js?v=1"></script>
+  <script src="/static/switchyard.js?v=4"></script>
 </body>
 </html>

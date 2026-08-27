@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Camera, Incident
+from app.services.llm import _fallback as create_grounded_summary_fallback
 from app.services.llm import create_grounded_summary
 from app.services.sop import search_sops
 from app.services.telegram import send_incident_alert, subscriber_chat_ids
@@ -58,7 +59,19 @@ async def enrich_and_notify(
             "scene_detections": assessment.get("scene_detections", []),
         },
     }
-    generated_summary, incident.recommended_action = await create_grounded_summary(event, sops)
+    validation = metadata.get("vision_validation") or {}
+    direct_iou_alert = (
+        isinstance(validation, dict)
+        and validation.get("mode") == "deterministic_iou"
+    )
+    if direct_iou_alert:
+        generated_summary, incident.recommended_action = (
+            create_grounded_summary_fallback(event, sops)
+        )
+    else:
+        generated_summary, incident.recommended_action = await create_grounded_summary(
+            event, sops
+        )
     if not preserve_summary:
         incident.summary = generated_summary
     incident.sop_title = sops[0].title if sops else "No matching SOP"

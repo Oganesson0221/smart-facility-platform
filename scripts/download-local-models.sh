@@ -11,9 +11,11 @@ find_hf_cli() {
   for candidate in \
     "${HF_CLI_BIN:-}" \
     "$(command -v hf 2>/dev/null || true)" \
+    ".app-venv/bin/hf" \
     ".venv/bin/hf" \
     ".nemo-venv/bin/hf" \
     "$(command -v huggingface-cli 2>/dev/null || true)" \
+    ".app-venv/bin/huggingface-cli" \
     ".venv/bin/huggingface-cli" \
     ".nemo-venv/bin/huggingface-cli"
   do
@@ -25,7 +27,7 @@ find_hf_cli() {
 hf_cli="$(find_hf_cli || true)"
 if [[ -z "${hf_cli:-}" ]]; then
   echo "No Hugging Face CLI binary was found."
-  echo "Install huggingface_hub in .venv or set HF_CLI_BIN explicitly."
+  echo "Run ./scripts/setup.sh first, or set HF_CLI_BIN explicitly."
   exit 1
 fi
 

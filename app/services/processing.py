@@ -634,6 +634,26 @@ async def _confirm_fire_exit_candidate(
     if not settings.validate_fire_exit_incidents_with_vision:
         return True, {"mode": "disabled"}, None
 
+    mask_zone_iou = obstruction.mask_zone_iou
+    threshold = settings.vision_validation_iou_threshold
+    if mask_zone_iou is not None and mask_zone_iou >= threshold:
+        return True, {
+            "mode": "deterministic_iou",
+            "confirmed": True,
+            "confidence": mask_zone_iou,
+            "summary": (
+                f"SAM mask/exit-zone IoU {mask_zone_iou:.1%} met the "
+                f"{threshold:.1%} direct-alert threshold; Nemotron was skipped."
+            ),
+            "visible_evidence": [
+                "YOLO detected a configured obstruction class",
+                "SAM mask overlap met the deterministic direct-alert threshold",
+            ],
+            "model": "YOLO + SAM deterministic gate",
+            "iou": mask_zone_iou,
+            "threshold": threshold,
+        }, None
+
     crop = _prepare_validation_image(
         _crop_validation_region(image, polygon_points, obstruction.detection.box)
     )
@@ -908,7 +928,16 @@ def _image_analysis_payload(
     vision_validations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     blocking = [item for item in stage.obstructions if item.is_blocking]
-    will_validate = bool(blocking) and settings.validate_fire_exit_incidents_with_vision
+    direct_alert = [
+        item
+        for item in blocking
+        if item.mask_zone_iou is not None
+        and item.mask_zone_iou >= settings.vision_validation_iou_threshold
+    ]
+    will_validate = (
+        settings.validate_fire_exit_incidents_with_vision
+        and len(direct_alert) < len(blocking)
+    )
     payload = {
         "provider": stage.provider,
         "detections": [_obstruction_to_dict(item) for item in stage.obstructions],
@@ -923,10 +952,12 @@ def _image_analysis_payload(
             {
                 "preview_token": stage.token,
                 "blocking_candidates": len(blocking),
+                "direct_alert_candidates": len(direct_alert),
+                "vision_validation_iou_threshold": settings.vision_validation_iou_threshold,
                 "will_validate_with_vision": will_validate,
                 "next_step": (
-                    "Nemotron validation"
-                    if will_validate
+                    "IoU gate: direct alert or Nemotron validation"
+                    if blocking and settings.validate_fire_exit_incidents_with_vision
                     else "Incident finalization"
                     if blocking
                     else "No escalation"

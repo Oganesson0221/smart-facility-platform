@@ -4,6 +4,10 @@ cd "$(dirname "$0")/.."
 
 # shellcheck disable=SC1091
 source ./scripts/load-dotenv.sh
+if [[ ! -f .env ]]; then
+  echo "Missing .env. Run ./scripts/setup.sh or copy .env.example to .env." >&2
+  exit 1
+fi
 load_dotenv_file .env
 
 runtime_dir="${STACK_RUNTIME_DIR:-$(pwd)/.runtime}"
@@ -113,8 +117,18 @@ fi
 echo
 if [[ "${START_APP:-true}" == "true" ]]; then
   echo "Smart Facility Platform is ready: http://127.0.0.1:${app_port}"
+  echo "Switchyard dashboard: http://127.0.0.1:${app_port}/switchyard"
 else
   echo "Local AI services are ready; start the FastAPI app separately on port ${app_port}."
+fi
+if [[ "${SWITCHYARD_ENABLED:-true}" == "true" ]]; then
+  if [[ "${START_APP:-true}" == "true" ]]; then
+    echo "Switchyard models: http://127.0.0.1:${app_port}/api/switchyard/models"
+    echo "Switchyard stats: http://127.0.0.1:${app_port}/api/switchyard/stats"
+    echo "Switchyard metrics: http://127.0.0.1:${app_port}/api/switchyard/metrics"
+  else
+    echo "Switchyard internal API: http://127.0.0.1:${switchyard_port}"
+  fi
 fi
 echo "Logs: $log_dir"
 echo "Stop: ./scripts/stop-all.sh"

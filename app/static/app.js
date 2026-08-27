@@ -82,6 +82,7 @@ function notificationDetail(status = "") {
 function visionValidationLabel(validation) {
   if (!validation) return "Not run";
   const confidence = validation.confidence == null ? "" : ` · ${formatPercent(validation.confidence)}`;
+  if (validation.mode === "deterministic_iou") return `Direct alert · IoU gate${confidence}`;
   if (validation.confirmed === true) return `Confirmed${confidence}`;
   if (validation.confirmed === false) return `Not confirmed${confidence}`;
   if (validation.accepted && validation.mode === "disabled") return "Accepted · validation disabled";
@@ -91,7 +92,7 @@ function visionValidationLabel(validation) {
 
 function fireExitVisionValidationMarkup(validations = []) {
   if (!validations.length) {
-    return `<p class="scene-section-copy">No candidate reached Nemotron validation.</p>`;
+    return `<p class="scene-section-copy">No candidate reached the vision routing gate.</p>`;
   }
   return `
     <div class="detection-detail-list">
@@ -245,10 +246,14 @@ function fireExitWorkflowMarkup(result, blocked) {
   const validations = result.vision_validations || [];
   const accepted = validations.filter(item => item.accepted).length;
   const rejected = validations.length - accepted;
+  const direct = validations.filter(item => item.mode === "deterministic_iou").length;
+  const multimodal = validations.length - direct;
   const validationDetail = !blocked.length
     ? "Multimodal validation was skipped because no deterministic candidate passed"
     : !validations.length
       ? "No Nemotron decision was returned"
+      : direct && !multimodal
+        ? `${direct} candidate${direct === 1 ? " was" : "s were"} sent directly after meeting the 70% SAM IoU gate`
       : rejected
         ? `${rejected} candidate${rejected === 1 ? " was" : "s were"} not confirmed by Nemotron`
         : `${accepted} candidate${accepted === 1 ? " was" : "s were"} confirmed by Nemotron`;
@@ -264,7 +269,7 @@ function fireExitWorkflowMarkup(result, blocked) {
       : "No candidate required SAM or segmentation fell back"],
     ["Mask overlap calculation", samUsed ? "Mask-based intrusion and blockage metrics were computed" : "Existing YOLO bounding-box overlap stayed active"],
     ["Persistence", state.mediaMode === "video" ? "Track persistence remains required before incident creation" : "Still-image path does not require persistence"],
-    ["Local vision validation", validationDetail],
+    ["Vision routing gate", validationDetail],
     ["SOP retrieval", result.incidents.length ? "The grounded NeMo SOP workflow ran for the confirmed incident" : "SOP retrieval was skipped because no incident was confirmed"],
     ["Incident notification", result.incidents.length
       ? `Incident evidence stored · ${notificationDetail(result.telegram_status)}`
@@ -379,6 +384,8 @@ function fireExitWorkflowPreviewMarkup(result) {
     item.spatial_method !== "sam_mask" && (item.fallback_reason || item.segmentation_state === "fallback")
   ).length;
   const blocked = Number(result.blocking_candidates || 0);
+  const direct = Number(result.direct_alert_candidates || 0);
+  const iouThreshold = formatPercent(result.vision_validation_iou_threshold ?? 0.7);
   const steps = [
     ["YOLO detection", `${(result.detections || []).length} candidate${(result.detections || []).length === 1 ? "" : "s"} identified locally`],
     [fullFrame ? "Full-frame pre-check" : "Fire-exit zone pre-check", fullFrame
@@ -392,8 +399,10 @@ function fireExitWorkflowPreviewMarkup(result) {
     ["Mask overlap calculation", blocked
       ? `${blocked} candidate${blocked === 1 ? "" : "s"} met the deterministic intrusion/blockage thresholds`
       : "No detection met the deterministic obstruction thresholds"],
-    ["Local vision validation", result.will_validate_with_vision
-      ? "Confirmed candidates are being sent to the multimodal validator now"
+    ["Vision routing gate", direct
+      ? `${direct} candidate${direct === 1 ? " meets" : "s meet"} the ${iouThreshold} SAM IoU threshold and can skip Nemotron`
+      : result.will_validate_with_vision
+      ? `Candidates below ${iouThreshold}, or without SAM IoU, are sent to Nemotron`
       : blocked
         ? "Multimodal validation is disabled, so the workflow will finalize directly"
         : "Multimodal validation is skipped because no obstruction was confirmed"],
@@ -445,7 +454,7 @@ function renderAnalysisPreview(result) {
           </div>
         </div>
         <p class="result-summary-copy">${blocked
-          ? "YOLO and SAM finished the deterministic pass. Multimodal validation is next."
+          ? "YOLO and SAM finished the deterministic pass. The 70% IoU gate now chooses direct notification or Nemotron validation."
           : "YOLO and SAM finished the deterministic pass. No blocking candidate needs escalation yet."}</p>
         ${detailCard("Workflow details", fireExitWorkflowPreviewMarkup(result), true)}
         ${detailCard("Detection details", fireExitDetectionListMarkup(result.detections || []))}
@@ -504,6 +513,8 @@ async function loadHealth() {
     const switchyardEnabled = Boolean(health.switchyard?.enabled);
     const switchyardReachable = Boolean(health.switchyard?.reachable);
     const telegramConfigured = Boolean(health.telegram_configured);
+    const telegramPollingState = String(health.telegram_polling?.status || "not_started");
+    const telegramReachable = telegramPollingState === "polling";
     $("#systemText").textContent = visionEnabled
       ? `${health.vision.model} · local stack`
       : `${health.detector} · local stack`;
@@ -534,6 +545,13 @@ async function loadHealth() {
     }
     if (!telegramConfigured) {
       setRuntimeNode("#telegramRuntime", "Alerting optional", "Telegram not configured", "warning");
+    } else if (!telegramReachable) {
+      setRuntimeNode(
+        "#telegramRuntime",
+        "Telegram offline",
+        compactDetail(health.telegram_polling?.last_error || `Polling ${telegramPollingState}`),
+        "warning",
+      );
     } else {
       setRuntimeNode(
         "#telegramRuntime",
@@ -545,7 +563,7 @@ async function loadHealth() {
       visionEnabled && (!visionReachable || !visionModelAvailable),
       switchyardEnabled && !switchyardReachable,
       nemoEnabled && !nemoReachable,
-      !telegramConfigured,
+      !telegramConfigured || !telegramReachable,
     ].filter(Boolean).length;
     const runtimeDisclosure = $(".runtime-disclosure");
     runtimeDisclosure.classList.toggle("warning", runtimeIssues > 0);
@@ -579,10 +597,12 @@ async function loadHealth() {
         ? `OpenAI-compatible local endpoint: ${health.llm.base_url}`
         : "Enable a local vLLM or other OpenAI-compatible endpoint in .env when ready.";
     $("#telegramName").textContent = health.telegram_configured
-      ? `Telegram configured · ${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"}`
+      ? `${telegramReachable ? "Telegram connected" : "Telegram disconnected"} · ${health.telegram_recipients} recipient${health.telegram_recipients === 1 ? "" : "s"}`
       : "Telegram not configured";
     $("#telegramStatus").textContent = health.telegram_configured
-      ? "Annotated evidence is routed to subscribed recipients through @SmartFacilityAssistant_bot."
+      ? telegramReachable
+        ? "Annotated evidence is routed to subscribed recipients through @SmartFacilityAssistant_bot."
+        : `Telegram Bot API is unreachable. ${health.telegram_polling?.last_error || "Polling will retry automatically."}`
       : "Add the bot token and recipient ID in .env, then message @SmartFacilityAssistant_bot with /start.";
     $("#telegramTest").disabled = !health.telegram_configured;
   } catch (error) {

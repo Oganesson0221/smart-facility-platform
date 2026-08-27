@@ -92,6 +92,24 @@ class SwitchyardSignalTests(unittest.TestCase):
 
 
 class SwitchyardClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_observability_proxy_methods_use_internal_switchyard_routes(self):
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            if request.url.path == "/metrics":
+                return httpx.Response(200, text="switchyard_requests_total 1\n")
+            return httpx.Response(200, json={"path": request.url.path})
+
+        client = SwitchyardClient(
+            base_url="http://switchyard.test",
+            transport=httpx.MockTransport(handler),
+        )
+        self.assertEqual((await client.models())["path"], "/v1/models")
+        self.assertEqual((await client.stats())["path"], "/v1/stats")
+        self.assertIn("switchyard_requests_total", await client.metrics())
+        self.assertEqual(seen, ["/v1/models", "/v1/stats", "/metrics"])
+
     async def test_chat_completion_extracts_official_selected_model_header(self):
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)

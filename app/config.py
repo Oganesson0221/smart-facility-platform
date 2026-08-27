@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     vision_validation_jpeg_quality: int = 80
     vision_validation_max_response_tokens: int = 300
     validate_fire_exit_incidents_with_vision: bool = True
+    vision_validation_iou_threshold: float = Field(0.70, ge=0, le=1)
     vision_validation_fail_closed: bool = False
 
     telegram_bot_token: str = ""
@@ -107,8 +108,11 @@ class Settings(BaseSettings):
     )
     telegram_webhook_secret: str = "change-me-before-enabling-webhooks"
     telegram_bot_username: str = "SmartFacilityAssistant_bot"
+    telegram_query_model: str = "Qwen/Qwen2.5-7B-Instruct"
     telegram_polling_enabled: bool = True
     telegram_poll_timeout_seconds: int = 25
+    telegram_api_base_url: str = "https://api.telegram.org"
+    telegram_proxy_url: str = ""
 
     @property
     def blocked_class_set(self) -> set[str]:

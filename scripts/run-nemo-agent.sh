@@ -23,11 +23,7 @@ uv_cmd="${uv_bin:-uv}"
 
 if [[ ! -x ".nemo-venv/bin/python" ]]; then
   echo "NeMo environment missing."
-  echo "Expected setup:"
-  echo "  1. Install Python 3.11 and uv on the host."
-  echo "  2. Run: ${uv_cmd} venv --python 3.11 .nemo-venv"
-  echo "  3. Run: ${uv_cmd} pip install --python .nemo-venv/bin/python -r requirements-nemo.txt"
-  echo "  4. Run: ${uv_cmd} pip install --python .nemo-venv/bin/python vllm"
+  echo "Run: ./scripts/setup.sh"
   exit 1
 fi
 
@@ -45,9 +41,7 @@ missing_tools=()
 if (( ${#missing_tools[@]} > 0 )); then
   echo "NeMo environment is incomplete."
   echo "Missing CLI tool(s): ${missing_tools[*]}"
-  echo "Recommended fix: ./scripts/setup-local-ai-runtime.sh"
-  echo "Reinstall with: ${uv_cmd} pip install --python .nemo-venv/bin/python -r requirements-nemo.txt"
-  echo "Then install vllm with: ${uv_cmd} pip install --python .nemo-venv/bin/python vllm"
+  echo "Recommended fix: ./scripts/setup.sh"
   exit 1
 fi
 

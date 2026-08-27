@@ -1,38 +1,29 @@
-# Smart Facility Platform — NVIDIA GB10 Setup
+# Smart Facility Platform
 
-ExitWatch runs locally with:
+Local fire-exit monitoring for NVIDIA GB10: YOLO and SAM identify an
+obstruction, a deterministic IoU gate avoids unnecessary model calls, Nemotron
+reviews ambiguous images, and Telegram keeps a human operator in control.
 
-- YOLO11n for object detection
-- SAM 2 for segmentation
-- Qwen 2.5 7B for efficient agent work
-- NVIDIA Nemotron 3 Nano Omni for vision and capable reasoning
-- NVIDIA NeMo Agent Toolkit for tool orchestration
-- NVIDIA NeMo Switchyard Stage Router for model selection
-
-Run every command from the repository root.
-
-## Architecture
+## How routing works
 
 ```text
-camera/image → YOLO → ROI filter → SAM 2 when needed
-             → Nemotron validation → advisory incident → human review
+Camera/image → YOLO → SAM → mask/zone IoU
+                              ├─ ≥ 70% → local SOP → Telegram (zero LLM tokens)
+                              └─ < 70% → Nemotron vision → confirmed incident
 
-FastAPI / NeMo Agent Toolkit
-              ↓
-Switchyard Stage Router :4000
-          ↙             ↘
-Qwen :8001          Nemotron :8002
-efficient             capable
+General text → Switchyard Stage Router → Qwen (routine) or Nemotron (capable)
+Telegram question → local incident/SOP retrieval → Qwen → operator reply
 ```
 
-Frames that fail the inexpensive YOLO/ROI checks never reach an LLM. Images are
-sent directly to the multimodal Nemotron endpoint, never to text-only Qwen.
+The system is advisory. It records evidence and notifies people; it does not
+perform physical facility actions.
 
 ## Fresh GB10 setup
 
-### 1. System tools
+### 1. Prerequisites
 
-Start with an NVIDIA GB10 system whose driver works:
+Use Ubuntu on an NVIDIA GB10 with a working driver, internet access, and at
+least 80 GB of free disk space:
 
 ```bash
 nvidia-smi
@@ -40,7 +31,8 @@ sudo apt update
 sudo apt install -y git curl build-essential
 ```
 
-Install `uv` and Rust/Cargo if they are not already available:
+Install [uv](https://docs.astral.sh/uv/) and
+[Rust](https://rustup.rs/) if needed, then open a new shell:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -50,88 +42,47 @@ uv --version
 cargo --version
 ```
 
-### 2. Configure ExitWatch
+### 2. Configure
+
+From the repository root:
 
 ```bash
 cp .env.example .env
 ```
 
-Do not overwrite an existing `.env`. Review these values:
+The defaults match the GB10 deployment. If Nemotron access requires a Hugging
+Face token, put it in `HF_TOKEN` in `.env`. Do not reuse that token as a local
+vLLM API key.
 
-```dotenv
-LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
-VISION_MODEL=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
-SWITCHYARD_ENABLED=true
-NEMO_AGENT_ENABLED=true
-```
+Telegram is optional. To enable it, set `TELEGRAM_BOT_TOKEN` and either
+`TELEGRAM_ALERT_CHAT_ID` or `USER_ID`. If the GB10 cannot reach
+`api.telegram.org`, set `TELEGRAM_PROXY_URL` or `TELEGRAM_API_BASE_URL`.
 
-`HF_TOKEN` is only for Hugging Face downloads. `LLM_API_KEY` and
-`VISION_API_KEY` are optional local vLLM endpoint keys; do not reuse a Hugging
-Face token for them.
-
-Telegram is optional. Leave its variables blank for a local-only setup.
-
-### 3. Install the application
+### 3. Install everything and download models
 
 ```bash
-uv venv --python 3.11 .app-venv
-uv pip install --python .app-venv/bin/python -r requirements.txt
+./scripts/setup.sh --download-models
 ```
 
-### 4. Install SAM 2
+This idempotent command creates `.app-venv` and `.nemo-venv`, installs the
+application, NeMo Agent Toolkit, vLLM, pinned SAM 2, pinned Switchyard, the SAM
+tiny checkpoint, Qwen, Nemotron, and YOLO weights. Qwen and Nemotron use about
+36 GB together and can take a while to download.
 
-A fresh checkout contains the pinned SAM 2 gitlink but no submodule URL. Populate
-it once:
+To install dependencies without downloading the large models:
 
 ```bash
-git clone https://github.com/facebookresearch/sam2.git third_party/sam2
-git -C third_party/sam2 checkout 2b90b9f5ceec907a1c18123530e92e794ad901a4
-uv pip install --python .app-venv/bin/python -r requirements-sam.txt
-uv pip install --python .app-venv/bin/python -e ./third_party/sam2
-(
-  cd third_party/sam2/checkpoints
-  ./download_ckpts.sh
-)
+./scripts/setup.sh
 ```
 
-If `third_party/sam2/.git` already exists, skip the two clone/checkout commands.
-
-### 5. Install NeMo, vLLM, and Switchyard
+Then download them later with:
 
 ```bash
-./scripts/setup-local-ai-runtime.sh
-uv pip install --python .nemo-venv/bin/python -e ./third_party/sam2
-./scripts/setup-switchyard.sh
-switchyard-server --help
-```
-
-Switchyard is the official native server pinned by
-`scripts/setup-switchyard.sh`. Validate its Stage Router configuration:
-
-```bash
-source ./scripts/load-dotenv.sh
-load_dotenv_file .env
-switchyard-server --config config/switchyard/routes.toml --dry-run
-```
-
-Expected output includes:
-
-```text
-server OK: switchyard/exitwatch-stage
-```
-
-### 6. Download local models
-
-Authenticate with Hugging Face and download the configured Qwen and Nemotron
-models:
-
-```bash
-.nemo-venv/bin/hf auth login
 ./scripts/download-local-models.sh
 .app-venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 ```
 
-Local assets should now include:
+Expected local assets:
 
 ```text
 models/Qwen/Qwen2.5-7B-Instruct/
@@ -140,82 +91,59 @@ third_party/sam2/checkpoints/sam2.1_hiera_tiny.pt
 yolo11n.pt
 ```
 
-## Run everything on the host (recommended)
+## Start, verify, and stop
 
 ```bash
 ./scripts/start-all.sh
+./scripts/check-local-ai.sh
 ```
 
-Startup order is Qwen `:8001`, Nemotron `:8002`, Switchyard `:4000`, NeMo
-Agent Toolkit `:8010`, then FastAPI `:8000`.
+Initial model loading can take several minutes. The scripts start and track:
 
-The GB10 defaults run YOLO/SAM on CPU while both LLMs use the unified GPU. The
-verified Nemotron reservation is `VISION_GPU_MEMORY_UTILIZATION=0.25`; adjust it
-in `.env` only if the hardware or model sizes change.
+| Service | Port | Purpose |
+|---|---:|---|
+| FastAPI dashboard | 8000 | UI and browser-safe APIs |
+| Qwen vLLM | 8001 | Efficient text and Telegram RAG |
+| Nemotron vLLM | 8002 | Capable text and multimodal validation |
+| Switchyard | 4000 | Internal Stage Router |
+| NeMo Agent Toolkit | 8010 | Tool orchestration |
 
 Open:
 
 - Dashboard: <http://127.0.0.1:8000>
-- Routing diagnostics: <http://127.0.0.1:8000/switchyard>
+- Routing architecture and statistics: <http://127.0.0.1:8000/switchyard>
 
-Verify the live stack:
-
-```bash
-./scripts/check-local-ai.sh
-```
-
-This checks all five services, both model IDs, routine and critical Switchyard
-routing, and a real NeMo/YOLO detector call.
-
-Stop everything:
+Stop only processes launched by `start-all.sh`:
 
 ```bash
 ./scripts/stop-all.sh
 ```
 
-## Optional: Dockerize only FastAPI
+### Access from a laptop over SSH
 
-Docker does not replace the model scripts. It packages FastAPI while the
-GPU-heavy Qwen, Nemotron, Switchyard, and NeMo services remain on the GB10 host.
-This option requires Docker Engine with the Compose plugin (`docker compose version`).
-
-Start the AI services without the host FastAPI process:
+Forward only the dashboard port; its Switchyard API links are proxied through
+FastAPI:
 
 ```bash
-START_APP=false ./scripts/start-all.sh
-docker compose up --build -d
-docker compose ps
-curl -fsS http://127.0.0.1:8000/api/health
+ssh -N -L 8000:127.0.0.1:8000 USER@GB10_HOST
 ```
 
-Compose uses Linux host networking so the container can reach the host services
-at the same `127.0.0.1` URLs from `.env`. The image excludes secrets, model
-directories, virtual environments, tests, and runtime data from its build
-context. Persistent `data/`, `uploads/`, and `evidence/` directories are
-mounted from the host.
+Then open <http://127.0.0.1:8000>. Port 4000 does not need a separate tunnel.
 
-Stop this layout with:
+## Useful configuration
 
-```bash
-docker compose down
-./scripts/stop-all.sh
-```
+The main defaults live in `.env.example`:
 
-## Tests
+- `LLM_GPU_MEMORY_UTILIZATION=0.35`
+- `VISION_GPU_MEMORY_UTILIZATION=0.45`
+- `VISION_VALIDATION_IOU_THRESHOLD=0.70`
+- `TELEGRAM_QUERY_MODEL=Qwen/Qwen2.5-7B-Instruct`
 
-```bash
-.app-venv/bin/python -m unittest discover -s tests -v
-.app-venv/bin/python scripts/test-switchyard-integration.py
-bash -n scripts/*.sh
-docker compose config --quiet
-```
+Only traffic through Switchyard appears in its token table. Telegram Qwen calls
+are visible in Qwen vLLM metrics, and ambiguous image calls are visible in
+Nemotron vLLM metrics.
 
-The real-server integration test uses local mock OpenAI targets so it verifies
-Switchyard itself without loading either large model.
-
-## Troubleshooting
-
-Inspect managed-service logs:
+## Logs and troubleshooting
 
 ```bash
 tail -n 100 logs/text-vllm.log
@@ -225,9 +153,46 @@ tail -n 100 logs/nemo-agent.log
 tail -n 100 logs/app.log
 ```
 
-If Nemotron reports insufficient free memory, confirm the Qwen and Nemotron
-reservations in `.env`; the verified GB10 defaults are `0.35` and `0.25`.
+Common failures:
 
-The `evidence/` directory is required runtime storage for incident images and
-Telegram attachments. Its generated contents can be archived or cleared only
-when the corresponding incident history is no longer needed.
+- **Model download denied:** accept the model terms on Hugging Face and set a
+  valid `HF_TOKEN`.
+- **CUDA memory error:** lower one GPU memory-utilization value in `.env`; keep
+  their combined reservation below the memory available after model loading.
+- **Telegram timeout:** configure `TELEGRAM_PROXY_URL` or a reachable Bot API
+  mirror. The local Qwen answer path can work even while Telegram delivery is
+  blocked.
+- **Stale PID:** rerun `start-all.sh`; it verifies both PID and process start
+  time before trusting a runtime record.
+
+## Tests
+
+Run tests without contacting the live NeMo detector from mocked CV fixtures:
+
+```bash
+NEMO_AGENT_ORCHESTRATE_CV=false \
+  .app-venv/bin/python -m unittest discover -s tests -v
+.app-venv/bin/python scripts/test-switchyard-integration.py
+bash -n scripts/*.sh
+```
+
+The Switchyard integration test starts the real pinned server against local mock
+OpenAI targets; it does not load the large models.
+
+## Optional FastAPI container
+
+The recommended deployment runs everything on the host. To containerize only
+FastAPI while keeping Qwen, Nemotron, Switchyard, and NeMo on the GB10 host:
+
+```bash
+START_APP=false ./scripts/start-all.sh
+docker compose up --build -d
+curl -fsS http://127.0.0.1:8000/api/health
+```
+
+Stop that layout with:
+
+```bash
+docker compose down
+./scripts/stop-all.sh
+```

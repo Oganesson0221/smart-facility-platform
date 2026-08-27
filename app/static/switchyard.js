@@ -52,6 +52,52 @@ function renderDecisions(stageRouter = {}) {
   });
 }
 
+function formatNumber(value, digits = 0) {
+  const number = Number(value || 0);
+  return Number.isFinite(number)
+    ? number.toLocaleString(undefined, { maximumFractionDigits: digits })
+    : "0";
+}
+
+function renderUsage(stats = {}) {
+  $("#usageRequests").textContent = formatNumber(stats.total_requests);
+  $("#usageTokens").textContent = formatNumber(stats.total_tokens?.total);
+  $("#usageErrors").textContent = formatNumber(stats.total_errors);
+  $("#usageOverhead").textContent = `${formatNumber(stats.routing_overhead?.avg_ms, 2)} ms avg`;
+  const body = $("#modelUsageBody");
+  body.replaceChildren();
+  const models = Object.entries(stats.models || {}).sort(([, a], [, b]) =>
+    Number(b.total_tokens || 0) - Number(a.total_tokens || 0)
+  );
+  if (!models.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 8;
+    cell.textContent = "No routed model calls recorded yet.";
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+  models.forEach(([model, usage]) => {
+    const row = document.createElement("tr");
+    [
+      model,
+      formatNumber(usage.calls),
+      `${formatNumber(usage.request_pct, 2)}%`,
+      formatNumber(usage.prompt_tokens),
+      formatNumber(usage.completion_tokens),
+      formatNumber(usage.total_tokens),
+      `${formatNumber(usage.token_pct, 2)}%`,
+      `${formatNumber(usage.total_latency?.avg_ms, 2)} ms`,
+    ].forEach(value => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    });
+    body.append(row);
+  });
+}
+
 async function request(path, options = {}) {
   const response = await fetch(path, options);
   let payload = {};
@@ -81,12 +127,23 @@ async function loadStatus() {
     setCard("#capableCard", "#capableState", "#capableDetail", ...capable);
 
     const latest = status.latest_routing;
+    const applicationRouting = status.application_routing || {};
+    $("#telegramQueryModel").textContent = text(
+      applicationRouting.telegram_query_model,
+      "Qwen/Qwen2.5-7B-Instruct",
+    );
+    const visionThreshold = `${formatNumber(Number(applicationRouting.vision_iou_threshold ?? 0.7) * 100, 1)}%`;
+    $("#visionIouThreshold").textContent = visionThreshold;
+    document.querySelectorAll(".vision-threshold-copy").forEach(item => {
+      item.textContent = visionThreshold;
+    });
     $("#latestModel").textContent = text(latest?.model, "No routed request yet");
     $("#latestTier").textContent = text(latest?.tier);
     $("#latestTime").textContent = latest?.ts
       ? `${latest.ts} · ${text(latest.total_tokens, 0)} tokens`
       : "Routing records appear after a completed request.";
     renderDecisions(status.stage_router);
+    renderUsage(status.stats);
   } catch (error) {
     setCard("#switchyardCard", "#switchyardState", "#switchyardDetail", "error", "Status unavailable", error.message);
   } finally {

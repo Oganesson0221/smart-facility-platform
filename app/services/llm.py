@@ -212,6 +212,18 @@ async def _text_completion(**kwargs):
     )
 
 
+async def _telegram_query_completion(**kwargs):
+    model = settings.telegram_query_model or settings.llm_model
+    LOGGER.info("[Telegram RAG] selected_model=%s route=pinned_qwen", model)
+    return await chat_completions(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        timeout_seconds=settings.llm_timeout_seconds,
+        model=model,
+        **kwargs,
+    )
+
+
 async def create_grounded_summary_direct(
     incident: dict,
     sops: list[SOPResult],
@@ -267,7 +279,7 @@ async def answer_sop_question_direct(
         return fallback
 
     try:
-        payload = await _text_completion(
+        payload = await _telegram_query_completion(
             messages=[
                 {"role": "system", "content": TELEGRAM_ASSISTANT_PROMPT},
                 {"role": "user", "content": user_content},

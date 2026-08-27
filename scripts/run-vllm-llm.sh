@@ -25,7 +25,7 @@ vllm_bin="$(find_vllm || true)"
 if [[ -z "${vllm_bin:-}" ]]; then
   echo "No vLLM binary was found."
   echo "Install vllm in .nemo-venv, .venv, or ~/.local/bin, or set VLLM_BIN explicitly."
-  echo "Recommended fix: ./scripts/setup-local-ai-runtime.sh"
+  echo "Recommended fix: ./scripts/setup.sh"
   exit 1
 fi
 

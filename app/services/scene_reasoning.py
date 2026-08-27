@@ -232,28 +232,53 @@ async def _call_vision_model(
     )
     timeout = timeout_seconds if timeout_seconds is not None else settings.vision_timeout_seconds
     try:
-        LOGGER.info(
-            "Vision request model=%s prompt_chars=%d image_bytes=%d response_tokens=%d",
-            settings.vision_model,
-            len(prompt),
-            len(image_bytes),
-            response_tokens,
-        )
-        payload = await chat_completions(
-            base_url=settings.vision_base_url,
-            api_key=settings.vision_api_key,
-            timeout_seconds=timeout,
-            model=settings.vision_model,
-            messages=multimodal_user_message(prompt, image_bytes),
-            temperature=0,
-            max_tokens=response_tokens,
-            response_format={"type": "json_object"},
-            extra_body={
-                "chat_template_kwargs": {
-                    "enable_thinking": settings.vision_enable_thinking,
-                }
-            },
-        )
+        payload: dict[str, Any] = {}
+        token_budgets = (response_tokens, max(512, response_tokens * 2))
+        for attempt, token_budget in enumerate(token_budgets, start=1):
+            LOGGER.info(
+                "Vision request model=%s prompt_chars=%d image_bytes=%d response_tokens=%d attempt=%d",
+                settings.vision_model,
+                len(prompt),
+                len(image_bytes),
+                token_budget,
+                attempt,
+            )
+            payload = await chat_completions(
+                base_url=settings.vision_base_url,
+                api_key=settings.vision_api_key,
+                timeout_seconds=timeout,
+                model=settings.vision_model,
+                messages=multimodal_user_message(prompt, image_bytes),
+                temperature=0,
+                max_tokens=token_budget,
+                response_format={"type": "json_object"},
+                extra_body={
+                    "chat_template_kwargs": {
+                        "enable_thinking": settings.vision_enable_thinking,
+                    }
+                },
+            )
+            choices = payload.get("choices", [])
+            finish_reason = (
+                choices[0].get("finish_reason")
+                if isinstance(choices, list)
+                and choices
+                and isinstance(choices[0], dict)
+                else None
+            )
+            if finish_reason not in {"length", "max_tokens"}:
+                break
+            if attempt < len(token_budgets):
+                LOGGER.warning(
+                    "Vision response was truncated at %d tokens; retrying with %d tokens",
+                    token_budget,
+                    token_budgets[attempt],
+                )
+        else:
+            raise RuntimeError(
+                f"Local vision model '{settings.vision_model}' exhausted the structured "
+                f"response token budget ({token_budgets[-1]} tokens)"
+            )
         LOGGER.info(
             "Vision response model=%s elapsed_ms=%.2f",
             settings.vision_model,

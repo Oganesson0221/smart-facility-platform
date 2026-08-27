@@ -28,11 +28,10 @@ if [[ ! -d ".nemo-venv" ]]; then
 fi
 
 "$uv_bin" pip install --python .nemo-venv/bin/python -r requirements-nemo.txt
-"$uv_bin" pip install --python .nemo-venv/bin/python vllm
 .nemo-venv/bin/python scripts/patch-flashinfer-python311.py
 
-if [[ -d "third_party/sam2" ]]; then
-  echo "Optional: install SAM 2 into the NeMo environment with:"
+if [[ -f "third_party/sam2/pyproject.toml" ]]; then
+  echo "Install SAM 2 into the NeMo environment with:"
   echo "  $uv_bin pip install --python .nemo-venv/bin/python -e ./third_party/sam2"
 fi
 
