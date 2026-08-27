@@ -32,3 +32,4 @@ models/nvidia/
 # Local test / media artifacts
 tests/Download.mp4
 models/
+third_party/sam2/

@@ -97,6 +97,7 @@ start_service() {
 }
 
 echo "Starting Smart Facility Platform"
+echo "Services load sequentially to limit peak disk I/O."
 start_service "text-vllm" "http://127.0.0.1:${llm_port}/health" "${TEXT_START_TIMEOUT:-900}" ./scripts/run-vllm-llm.sh
 start_service "vision-vllm" "http://127.0.0.1:${vision_port}/health" "${VISION_START_TIMEOUT:-1200}" ./scripts/run-vllm-vision.sh
 start_service "nemo-agent" "http://127.0.0.1:${nemo_port}/health" "${NEMO_START_TIMEOUT:-180}" ./scripts/run-nemo-agent.sh
@@ -104,7 +105,12 @@ start_service "app" "http://127.0.0.1:${app_port}/api/health" "${APP_START_TIMEO
 
 echo
 echo "Smart Facility Platform is ready: http://127.0.0.1:${app_port}"
-echo "Logs: $log_dir"
+printf '%-18s %-8s %s\n' "SERVICE" "PORT" "LOG"
+printf '%-18s %-8s %s\n' "Qwen vLLM" "$llm_port" "$log_dir/text-vllm.log"
+printf '%-18s %-8s %s\n' "Nemotron vLLM" "$vision_port" "$log_dir/vision-vllm.log"
+printf '%-18s %-8s %s\n' "NeMo Agent" "$nemo_port" "$log_dir/nemo-agent.log"
+printf '%-18s %-8s %s\n' "FastAPI" "$app_port" "$log_dir/app.log"
+echo "Status: ./scripts/status-all.sh"
 echo "Stop: ./scripts/stop-all.sh"
 
 if [[ "${START_RUN_CHECKS:-false}" == "true" ]]; then

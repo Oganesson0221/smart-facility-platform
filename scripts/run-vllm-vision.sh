@@ -57,6 +57,7 @@ max_num_batched_tokens="${VISION_MAX_NUM_BATCHED_TOKENS:-32768}"
 reasoning_parser="${VISION_REASONING_PARSER:-nemotron_v3}"
 kv_cache_dtype="${VISION_KV_CACHE_DTYPE:-fp8}"
 moe_backend="${VISION_MOE_BACKEND:-}"
+attention_backend="${VISION_ATTENTION_BACKEND:-TRITON_ATTN}"
 
 args=(
   serve
@@ -82,6 +83,10 @@ fi
 
 if [[ -n "${gpu_memory_utilization}" ]]; then
   args+=(--gpu-memory-utilization "$gpu_memory_utilization")
+fi
+
+if [[ -n "${attention_backend}" ]]; then
+  args+=(--attention-backend "$attention_backend")
 fi
 
 if [[ "${served_model_name,,}" == *"nemotron"* || "${model_source,,}" == *"nemotron"* ]]; then
