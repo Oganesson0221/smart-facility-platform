@@ -1,3 +1,8 @@
+# Optional hybrid deployment: only FastAPI is containerized. The two vLLM
+# servers, Switchyard, and NeMo Agent Toolkit continue to run on the GB10 host.
+# A future full-stack deployment should define those as separate services with
+# explicit GPU reservations, persistent model-cache volumes, and service-name
+# URLs instead of host networking.
 services:
   smart-facility-platform:
     build: .
@@ -5,8 +10,9 @@ services:
       - .env
     environment:
       SAM_CHECKPOINT_PATH: /app/third_party/sam2/checkpoints/sam2.1_hiera_tiny.pt
-    # Linux host networking lets the app use the same 127.0.0.1 model URLs as
-    # the host-run vLLM, Switchyard, and NeMo Agent Toolkit services.
+    # Linux host networking lets the container reuse the current 127.0.0.1
+    # model URLs. Remove this in a full-stack Compose deployment and address
+    # upstream containers by service name instead.
     network_mode: host
     init: true
     volumes:

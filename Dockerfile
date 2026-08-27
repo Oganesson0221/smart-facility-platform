@@ -1,3 +1,7 @@
+# Optional FastAPI-only image. The recommended GB10 setup runs this application
+# directly with scripts/start-all.sh. This image does not contain Qwen,
+# Nemotron, Switchyard, or NeMo Agent Toolkit; Compose connects it to those
+# services running on the host.
 FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,6 +17,9 @@ COPY . .
 RUN pip install --no-cache-dir --no-build-isolation --no-deps -e ./third_party/sam2
 RUN mkdir -p data uploads evidence
 EXPOSE 8000
+# This checks the complete application health endpoint. Before using this image
+# in production, add a lightweight liveness endpoint so container probes never
+# invoke model-backed dependency checks or affect token accounting.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

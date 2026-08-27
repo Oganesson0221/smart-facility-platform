@@ -214,3 +214,14 @@ Stop that layout with:
 docker compose down
 ./scripts/stop-all.sh
 ```
+
+This is intentionally a hybrid layout: the Docker image contains only the
+FastAPI application. A future full-stack container deployment can add separate
+services for Switchyard, NeMo Agent Toolkit, Qwen vLLM, and Nemotron vLLM. That
+deployment should also:
+
+- reserve GPU memory explicitly for each vLLM service;
+- persist model caches, SAM checkpoints, application data, and evidence;
+- use Compose service names instead of `127.0.0.1` between containers;
+- keep credentials in container secrets rather than image layers; and
+- provide token-free liveness/readiness probes and start-order checks.
