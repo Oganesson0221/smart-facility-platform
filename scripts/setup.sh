@@ -32,6 +32,24 @@ require_command() {
   }
 }
 
+validate_env_file() {
+  local line line_number=0 failures=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_number=$((line_number + 1))
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ ! "$line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      echo ".env:${line_number}: expected NAME=value, found invalid text" >&2
+      failures=$((failures + 1))
+    fi
+  done < .env
+  if (( failures > 0 )); then
+    echo "Remove the invalid lines from .env and rerun setup." >&2
+    exit 1
+  fi
+}
+
 find_uv() {
   local candidate
   for candidate in "${UV_BIN:-}" "$(command -v uv 2>/dev/null || true)" "$HOME/.local/bin/uv"; do
@@ -55,6 +73,7 @@ if [[ ! -f .env ]]; then
 else
   echo "Keeping existing .env"
 fi
+validate_env_file
 # Switchyard's config references API-key environment variables. They may be
 # empty for local endpoints, but must exist while the config is validated.
 # shellcheck disable=SC1091
@@ -85,7 +104,7 @@ if [[ "$current_sam_revision" != "$sam_revision" ]]; then
   git -C third_party/sam2 checkout --detach "$sam_revision"
 fi
 "$uv_bin" pip install --python .app-venv/bin/python -r requirements-sam.txt
-"$uv_bin" pip install --python .app-venv/bin/python --no-build-isolation -e ./third_party/sam2
+"$uv_bin" pip install --python .app-venv/bin/python --no-build-isolation --no-deps -e ./third_party/sam2
 
 sam_checkpoint="third_party/sam2/checkpoints/sam2.1_hiera_tiny.pt"
 if [[ ! -s "$sam_checkpoint" ]]; then
@@ -97,7 +116,7 @@ fi
 
 echo "[3/6] Installing NeMo Agent Toolkit and vLLM"
 UV_BIN="$uv_bin" ./scripts/setup-local-ai-runtime.sh
-"$uv_bin" pip install --python .nemo-venv/bin/python --no-build-isolation -e ./third_party/sam2
+"$uv_bin" pip install --python .nemo-venv/bin/python --no-build-isolation --no-deps -e ./third_party/sam2
 
 echo "[4/6] Installing the pinned Switchyard server"
 ./scripts/setup-switchyard.sh
@@ -111,7 +130,7 @@ if [[ -z "$switchyard_bin" ]]; then
 fi
 
 echo "[5/6] Validating local configuration"
-.app-venv/bin/python -c 'from app.config import settings; print(f"App config OK: {settings.app_name}")'
+.app-venv/bin/python -c 'import cv2, numpy, sam2; from app.config import settings; assert int(numpy.__version__.split(".")[0]) < 2; print(f"App/CV imports OK: {settings.app_name}, NumPy {numpy.__version__}, OpenCV {cv2.__version__}")'
 .nemo-venv/bin/python -c 'import vllm; import nat; print("NeMo/vLLM imports OK")'
 "$switchyard_bin" \
   --config "${SWITCHYARD_CONFIG:-config/switchyard/routes.toml}" --dry-run

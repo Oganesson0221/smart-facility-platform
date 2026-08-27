@@ -135,9 +135,13 @@ Then open <http://127.0.0.1:8000>. Port 4000 does not need a separate tunnel.
 The main defaults live in `.env.example`:
 
 - `LLM_GPU_MEMORY_UTILIZATION=0.35`
-- `VISION_GPU_MEMORY_UTILIZATION=0.45`
+- `VISION_GPU_MEMORY_UTILIZATION=0.38`
 - `VISION_VALIDATION_IOU_THRESHOLD=0.70`
 - `TELEGRAM_QUERY_MODEL=Qwen/Qwen2.5-7B-Instruct`
+
+`HF_TOKEN` is only for downloading gated Hugging Face models. Keep
+`LLM_API_KEY` and `VISION_API_KEY` empty for the default localhost servers;
+putting a Hugging Face token there can expose it in vLLM startup logs.
 
 Only traffic through Switchyard appears in its token table. Telegram Qwen calls
 are visible in Qwen vLLM metrics, and ambiguous image calls are visible in

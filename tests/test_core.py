@@ -439,6 +439,14 @@ class TrackerTests(unittest.TestCase):
 
 class ProcessingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        # Unit tests use their local detector/segmenter fakes by default. Keep
+        # an enabled deployment .env from sending accidental live NeMo calls;
+        # orchestration-specific tests opt back in with their own patch.
+        nemo_agent_patch = patch(
+            "app.services.processing.settings.nemo_agent_enabled", False
+        )
+        nemo_agent_patch.start()
+        self.addCleanup(nemo_agent_patch.stop)
         self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
         Base.metadata.create_all(self.engine)
         self.SessionLocal = sessionmaker(
@@ -1382,6 +1390,8 @@ class SupportServiceTests(unittest.TestCase):
     def test_fire_exit_validation_prompt_includes_primary_yolo_label(self):
         with patch(
             "app.services.scene_reasoning.settings.vision_enabled", True
+        ), patch(
+            "app.services.scene_reasoning.settings.nemo_agent_orchestrate_vision", False
         ), patch(
             "app.services.scene_reasoning._call_vision_model",
             AsyncMock(

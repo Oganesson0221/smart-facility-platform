@@ -47,9 +47,14 @@ else
   model_source="$served_model_name"
 fi
 api_key="${VISION_API_KEY:-${LLM_API_KEY:-}}"
+if [[ "$api_key" == hf_* ]]; then
+  echo "Ignoring a Hugging Face token supplied as VISION_API_KEY/LLM_API_KEY." >&2
+  echo "Use HF_TOKEN for downloads and leave local vLLM API keys empty." >&2
+  api_key=""
+fi
 mm_limit_per_prompt="${VISION_MM_LIMIT_PER_PROMPT:-{\"image\":1}}"
 max_model_len="${VISION_MAX_MODEL_LEN:-8192}"
-gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.45}"
+gpu_memory_utilization="${VISION_GPU_MEMORY_UTILIZATION:-0.38}"
 max_num_seqs="${VISION_MAX_NUM_SEQS:-8}"
 max_num_batched_tokens="${VISION_MAX_NUM_BATCHED_TOKENS:-32768}"
 reasoning_parser="${VISION_REASONING_PARSER:-nemotron_v3}"

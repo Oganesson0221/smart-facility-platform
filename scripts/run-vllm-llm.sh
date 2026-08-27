@@ -50,6 +50,12 @@ max_model_len="${LLM_MAX_MODEL_LEN:-8192}"
 gpu_memory_utilization="${LLM_GPU_MEMORY_UTILIZATION:-0.35}"
 tool_call_parser="${LLM_TOOL_CALL_PARSER:-}"
 reasoning_parser="${LLM_REASONING_PARSER:-}"
+llm_api_key="${LLM_API_KEY:-}"
+if [[ "$llm_api_key" == hf_* ]]; then
+  echo "Ignoring a Hugging Face token supplied as LLM_API_KEY." >&2
+  echo "Use HF_TOKEN for downloads and leave the local vLLM API key empty." >&2
+  llm_api_key=""
+fi
 
 looks_like_qwen25() {
   local value="${1:-}"
@@ -87,8 +93,8 @@ if [[ -n "${reasoning_parser}" ]]; then
   args+=(--reasoning-parser "$reasoning_parser")
 fi
 
-if [[ -n "${LLM_API_KEY:-}" ]]; then
-  args+=(--api-key "$LLM_API_KEY")
+if [[ -n "$llm_api_key" ]]; then
+  args+=(--api-key "$llm_api_key")
 fi
 
 if [[ -n "${VLLM_DOWNLOAD_DIR:-}" ]]; then
