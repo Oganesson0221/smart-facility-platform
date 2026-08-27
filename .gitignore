@@ -16,8 +16,6 @@ uploads/*
 !uploads/.gitkeep
 evidence/*
 !evidence/.gitkeep
-lab_outputs/*
-!lab_outputs/.gitkeep
 *.log
 
 # Local AI models / weights

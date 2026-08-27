@@ -63,7 +63,14 @@ check_nemo_tool_call() {
   local base_url
   base_url="$(openai_base_url "${NEMO_AGENT_BASE_URL:-http://127.0.0.1:8010/v1}")"
   local url="${base_url}/chat/completions"
-  local image_path="$(pwd)/lab_images/car4.jpg"
+  local image_path
+  image_path="$(mktemp /tmp/smart-facility-check.XXXXXX.jpg)"
+  if ! curl --connect-timeout 2 --max-time 10 -fsS \
+    "http://127.0.0.1:${APP_PORT:-8000}/api/demo/frame" -o "$image_path"; then
+    rm -f "$image_path"
+    fail "Could not create the temporary detector test image"
+    return
+  fi
   local payload response
   payload="$(printf '{"model":"%s","messages":[{"role":"system","content":"Do not answer directly. Call detect_image_objects exactly once with the supplied image_path and confidence_threshold=0.35. Return only the tool result."},{"role":"user","content":"Run detection for image_path=%s now."}],"temperature":0,"stream":false}' "${NEMO_AGENT_MODEL:-smart-facility-agent}" "$image_path")"
   local curl_args=(--connect-timeout 2 --max-time "${NEMO_AGENT_TIMEOUT_SECONDS:-120}" -fsS -X POST -H "Content-Type: application/json")
@@ -71,9 +78,11 @@ check_nemo_tool_call() {
     curl_args+=(-H "Authorization: Bearer ${NEMO_AGENT_API_KEY}")
   fi
   if ! response="$(curl "${curl_args[@]}" -d "$payload" "$url")"; then
+    rm -f "$image_path"
     fail "NeMo detector tool call: ${url}"
     return
   fi
+  rm -f "$image_path"
   if [[ "$response" == *'detections'* ]]; then
     pass "NeMo executed facility_object_detector"
   else

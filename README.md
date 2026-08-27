@@ -225,6 +225,3 @@ servers. `HF_TOKEN` is only a model-download credential.
 .app-venv/bin/python -m compileall -q app tests
 bash -n scripts/*.sh
 ```
-
-The architecture source is in
-[`docs/architecture.mmd`](docs/architecture.mmd).
