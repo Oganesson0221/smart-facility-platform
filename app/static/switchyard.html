@@ -90,7 +90,7 @@
             <div class="architecture-node router-node"><small>IoU GATE</small><strong>SAM mask / exit zone</strong><span>threshold <b id="visionIouThreshold">70%</b></span></div>
             <span class="architecture-arrow branch-arrow">↗<br>↘</span>
             <div class="architecture-targets">
-              <div class="architecture-node zero-token-node"><small>IoU ≥ <b class="vision-threshold-copy">70%</b></small><strong>Local incident workflow</strong><span>zero LLM tokens · no Switchyard call</span></div>
+              <div class="architecture-node zero-token-node"><small>IoU ≥ <b class="vision-threshold-copy">70%</b></small><strong>Local incident workflow</strong><span>zero additional post-gate LLM tokens · no vision-route call</span></div>
               <div class="architecture-node switchyard-node"><small>IoU &lt; <b class="vision-threshold-copy">70%</b> / unavailable</small><strong id="visionRouteArchitecture">switchyard/exitwatch-vision</strong><span>passthrough → Nemotron · ports 4000 → 8002</span></div>
             </div>
           </div>
@@ -98,7 +98,7 @@
       </div>
       <div class="accounting-legend" aria-label="Token accounting boundaries">
         <div><span class="legend-dot switchyard-dot"></span><strong>Stage Router accounting</strong><small>Lane 1 records Qwen or Nemotron, tokens, latency, and routing decisions.</small></div>
-        <div><span class="legend-dot vision-dot"></span><strong>Vision passthrough accounting</strong><small>Lane 2 records only low-IoU Nemotron calls; high-IoU cases spend zero LLM tokens.</small></div>
+        <div><span class="legend-dot vision-dot"></span><strong>Vision passthrough accounting</strong><small>Lane 2 records only low-IoU Nemotron calls. High-IoU cases add no post-gate LLM call; earlier NeMo tool orchestration for YOLO or SAM remains counted in Lane 1.</small></div>
       </div>
       <p class="architecture-note">Both routes return the selected backend in <code>x-model-router-selected-model</code>. Switchyard updates <code>/v1/stats</code>, <code>/metrics</code>, and the routing JSONL only after a routed response completes.</p>
     </section>

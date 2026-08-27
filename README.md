@@ -8,12 +8,16 @@ reviews ambiguous images, and Telegram keeps a human operator in control.
 
 ```text
 Camera/image → YOLO → SAM → mask/zone IoU
-                              ├─ ≥ 70% → local SOP → Telegram (zero LLM tokens)
+                              ├─ ≥ 70% → local SOP → Telegram (no post-gate LLM call)
                               └─ < 70% → Switchyard vision route → Nemotron → confirmed incident
 
 General text → Switchyard Stage Router → Qwen (routine) or Nemotron (capable)
 Telegram question → local incident/SOP retrieval → Qwen → operator reply
 ```
+
+With NeMo CV orchestration enabled, Qwen tool-selection calls used to invoke
+YOLO or SAM are counted by the Stage Router before the IoU gate. "No post-gate
+LLM call" means that a high-IoU result does not add a Nemotron validation call.
 
 The system is advisory. It records evidence and notifies people; it does not
 perform physical facility actions.
@@ -41,7 +45,7 @@ source "$HOME/.cargo/env"
 uv --version
 cargo --version
 ```
-
+Proceed with standard initialisation
 ### 2. Configure
 
 From the repository root:
