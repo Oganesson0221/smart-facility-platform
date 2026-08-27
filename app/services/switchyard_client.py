@@ -276,13 +276,21 @@ class SwitchyardClient:
         except (httpx.HTTPError, ValueError) as exc:
             return {**result, "reachable": False, "detail": str(exc)}
         routes = _route_ids(models)
+        required_routes = (self.model, settings.switchyard_vision_model)
+        missing_routes = [route for route in required_routes if route not in routes]
         result.update(
             {
                 "routes": routes,
                 "route_available": self.model in routes,
+                "vision_route": settings.switchyard_vision_model,
+                "vision_route_available": settings.switchyard_vision_model in routes,
                 "stats": stats,
                 "stage_router": stats.get("algorithm_stats", {}).get("stage_router", {}),
-                "detail": "ready" if self.model in routes else f"Route '{self.model}' is missing",
+                "detail": (
+                    "ready"
+                    if not missing_routes
+                    else f"Missing Switchyard route(s): {', '.join(missing_routes)}"
+                ),
             }
         )
         return result
@@ -296,6 +304,7 @@ class SwitchyardClient:
         response_format: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         session_id: str | None = None,
     ) -> RoutedCompletion:
         body = {
@@ -312,6 +321,8 @@ class SwitchyardClient:
         ):
             if value is not None:
                 body[key] = value
+        if extra_body:
+            body.update(extra_body)
         headers = build_headers(self.api_key)
         if session_id:
             headers["x-switchyard-session-id"] = session_id
@@ -459,3 +470,49 @@ async def routed_text_completion(**kwargs: Any) -> RoutedCompletion:
             settings.llm_model,
         )
         return RoutedCompletion(payload, settings.llm_model, ("local_fallback",), 0.0, True)
+
+
+async def routed_vision_completion(**kwargs: Any) -> RoutedCompletion:
+    """Send an ambiguous image through Switchyard's Nemotron passthrough route."""
+    client = SwitchyardClient(
+        model=settings.switchyard_vision_model,
+        timeout_seconds=kwargs.pop("timeout_seconds", settings.vision_timeout_seconds),
+    )
+    try:
+        if not settings.switchyard_enabled:
+            raise SwitchyardError("Switchyard vision routing is disabled")
+        result = await client.chat_completion(**kwargs)
+        if result.selected_model != settings.vision_model:
+            raise SwitchyardError(
+                "Vision route selected unexpected model "
+                f"'{result.selected_model}'; expected '{settings.vision_model}'"
+            )
+        return result
+    except SwitchyardError:
+        if not settings.switchyard_vision_fallback_enabled:
+            raise
+        payload = await chat_completions(
+            base_url=settings.vision_base_url,
+            api_key=settings.vision_api_key,
+            timeout_seconds=client.timeout_seconds,
+            model=settings.vision_model,
+            messages=kwargs["messages"],
+            temperature=kwargs.get("temperature", 0.0),
+            max_tokens=kwargs.get("max_tokens"),
+            response_format=kwargs.get("response_format"),
+            tools=kwargs.get("tools"),
+            tool_choice=kwargs.get("tool_choice"),
+            extra_body=kwargs.get("extra_body"),
+        )
+        LOGGER.warning(
+            "[Switchyard] route=%s fallback_model=%s decision_source=direct_vision_fallback",
+            settings.switchyard_vision_model,
+            settings.vision_model,
+        )
+        return RoutedCompletion(
+            payload,
+            settings.vision_model,
+            ("direct_vision_fallback",),
+            0.0,
+            True,
+        )

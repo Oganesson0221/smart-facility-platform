@@ -9,7 +9,7 @@ reviews ambiguous images, and Telegram keeps a human operator in control.
 ```text
 Camera/image → YOLO → SAM → mask/zone IoU
                               ├─ ≥ 70% → local SOP → Telegram (zero LLM tokens)
-                              └─ < 70% → Nemotron vision → confirmed incident
+                              └─ < 70% → Switchyard vision route → Nemotron → confirmed incident
 
 General text → Switchyard Stage Router → Qwen (routine) or Nemotron (capable)
 Telegram question → local incident/SOP retrieval → Qwen → operator reply
@@ -105,7 +105,7 @@ Initial model loading can take several minutes. The scripts start and track:
 | FastAPI dashboard | 8000 | UI and browser-safe APIs |
 | Qwen vLLM | 8001 | Efficient text and Telegram RAG |
 | Nemotron vLLM | 8002 | Capable text and multimodal validation |
-| Switchyard | 4000 | Internal Stage Router |
+| Switchyard | 4000 | Stage Router and Nemotron vision passthrough |
 | NeMo Agent Toolkit | 8010 | Tool orchestration |
 
 Open:
@@ -134,18 +134,29 @@ Then open <http://127.0.0.1:8000>. Port 4000 does not need a separate tunnel.
 
 The main defaults live in `.env.example`:
 
-- `LLM_GPU_MEMORY_UTILIZATION=0.35`
+- `LLM_GPU_MEMORY_UTILIZATION=0.32`
 - `VISION_GPU_MEMORY_UTILIZATION=0.38`
 - `VISION_VALIDATION_IOU_THRESHOLD=0.70`
+- `SWITCHYARD_MODEL=switchyard/exitwatch-stage`
+- `SWITCHYARD_VISION_MODEL=switchyard/exitwatch-vision`
+- `SWITCHYARD_VISION_FALLBACK_ENABLED=false`
 - `TELEGRAM_QUERY_MODEL=Qwen/Qwen2.5-7B-Instruct`
 
 `HF_TOKEN` is only for downloading gated Hugging Face models. Keep
 `LLM_API_KEY` and `VISION_API_KEY` empty for the default localhost servers;
 putting a Hugging Face token there can expose it in vLLM startup logs.
 
-Only traffic through Switchyard appears in its token table. Telegram Qwen calls
-are visible in Qwen vLLM metrics, and ambiguous image calls are visible in
-Nemotron vLLM metrics.
+Only traffic through Switchyard appears in its token table. General text uses
+the `switchyard/exitwatch-stage` Stage Router. Images at or above the IoU
+threshold skip all LLM calls; lower-IoU images use the
+`switchyard/exitwatch-vision` passthrough route and are counted by both
+Switchyard and Nemotron vLLM. Telegram Qwen calls remain outside Switchyard and
+are visible only in Qwen vLLM metrics.
+
+Keep `SWITCHYARD_VISION_FALLBACK_ENABLED=false` for strict accounting: an
+ambiguous vision call must cross Switchyard or fail visibly. Enabling it allows
+a direct Nemotron fallback during a Switchyard outage, which cannot appear in
+Switchyard statistics.
 
 ## Logs and troubleshooting
 
@@ -171,11 +182,10 @@ Common failures:
 
 ## Tests
 
-Run tests without contacting the live NeMo detector from mocked CV fixtures:
+Run the isolated unit tests and the real Switchyard integration test:
 
 ```bash
-NEMO_AGENT_ORCHESTRATE_CV=false \
-  .app-venv/bin/python -m unittest discover -s tests -v
+.app-venv/bin/python -m unittest discover -s tests -v
 .app-venv/bin/python scripts/test-switchyard-integration.py
 bash -n scripts/*.sh
 ```

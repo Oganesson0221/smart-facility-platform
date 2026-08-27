@@ -94,7 +94,10 @@ check_nemo_fire_exit_validation() {
   base_url="$(openai_base_url "${NEMO_AGENT_BASE_URL:-http://127.0.0.1:8010/v1}")"
   local url="${base_url}/chat/completions"
   local image_path="$(pwd)/tests/car4.jpeg"
-  local payload response
+  local payload response before_calls after_calls
+  before_calls="$(curl --connect-timeout 2 --max-time 10 -fsS "${switchyard_url}/v1/stats" | "$json_python" -c \
+    'import json,sys; model=sys.argv[1]; stats=json.load(sys.stdin); print(int(stats.get("models", {}).get(model, {}).get("calls", 0)))' \
+    "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}" 2>/dev/null || printf '0')"
   payload="$(printf '{"model":"%s","messages":[{"role":"system","content":"Do not answer directly. Call validate_fire_exit_image exactly once with the supplied image_path and object_label. Return only the validation JSON object with no markdown."},{"role":"user","content":"{\\"image_path\\":\\"%s\\",\\"object_label\\":\\"car\\"}"}],"temperature":0,"stream":false}' "${NEMO_AGENT_MODEL:-smart-facility-agent}" "$image_path")"
   local curl_args=(--connect-timeout 2 --max-time "${NEMO_AGENT_TIMEOUT_SECONDS:-120}" -fsS -X POST -H "Content-Type: application/json")
   if [[ -n "${NEMO_AGENT_API_KEY:-}" ]]; then
@@ -105,7 +108,14 @@ check_nemo_fire_exit_validation() {
     return
   fi
   if [[ "$response" == *'confirmed'* && "$response" == *'visible_evidence'* ]]; then
-    pass "NeMo completed structured Nemotron fire-exit validation"
+    after_calls="$(curl --connect-timeout 2 --max-time 10 -fsS "${switchyard_url}/v1/stats" | "$json_python" -c \
+      'import json,sys; model=sys.argv[1]; stats=json.load(sys.stdin); print(int(stats.get("models", {}).get(model, {}).get("calls", 0)))' \
+      "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}" 2>/dev/null || printf '0')"
+    if (( after_calls > before_calls )); then
+      pass "NeMo completed structured fire-exit validation through Switchyard vision routing"
+    else
+      fail "NeMo validation completed but Switchyard recorded no Nemotron vision call"
+    fi
   else
     fail "NeMo fire-exit validation returned no structured validation result"
   fi
@@ -144,6 +154,7 @@ check_health "Vision vLLM" "${vision_url%/v1}/health"
 check_model "Vision vLLM" "${vision_url}/models" "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}" "${VISION_API_KEY:-${LLM_API_KEY:-}}"
 check_health "Switchyard" "${switchyard_url}/health"
 check_model "Switchyard route" "${switchyard_url}/v1/models" "${SWITCHYARD_MODEL:-switchyard/exitwatch-stage}" "${SWITCHYARD_API_KEY:-}"
+check_model "Switchyard vision route" "${switchyard_url}/v1/models" "${SWITCHYARD_VISION_MODEL:-switchyard/exitwatch-vision}" "${SWITCHYARD_API_KEY:-}"
 check_health "NeMo Agent Toolkit" "${nemo_url%/v1}/health"
 check_switchyard_route "routine" "${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
 check_switchyard_route "critical" "${VISION_MODEL:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4}"

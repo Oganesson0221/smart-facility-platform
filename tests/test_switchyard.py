@@ -2,16 +2,18 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from app.services.switchyard_client import SELECTED_MODEL_HEADER
 from app.services.switchyard_client import SwitchyardClient
 from app.services.switchyard_client import SwitchyardError
+from app.services.switchyard_client import RoutedCompletion
 from app.services.switchyard_client import _decision_delta
 from app.services.switchyard_client import diagnostic_messages
 from app.services.switchyard_client import latest_routing_record
+from app.services.switchyard_client import routed_vision_completion
 
 
 class SwitchyardSignalTests(unittest.TestCase):
@@ -135,10 +137,40 @@ class SwitchyardClientTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await client.chat_completion(
             messages=[{"role": "user", "content": "hello"}],
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             session_id="test-session",
         )
         self.assertEqual(result.selected_model, "Qwen/Qwen2.5-7B-Instruct")
         self.assertEqual(result.payload["choices"][0]["message"]["content"], "ok")
+
+    async def test_vision_completion_uses_dedicated_route_and_requires_nemotron(self):
+        expected = RoutedCompletion(
+            {"choices": [{"message": {"content": "{}"}}]},
+            "nemotron-test",
+            (),
+            3.0,
+        )
+        with patch(
+            "app.services.switchyard_client.settings.switchyard_enabled", True
+        ), patch(
+            "app.services.switchyard_client.settings.switchyard_vision_model",
+            "switchyard/vision-test",
+        ), patch(
+            "app.services.switchyard_client.settings.vision_model", "nemotron-test"
+        ), patch(
+            "app.services.switchyard_client.SwitchyardClient"
+        ) as factory:
+            factory.return_value.chat_completion = AsyncMock(return_value=expected)
+            result = await routed_vision_completion(
+                messages=[{"role": "user", "content": "image"}],
+                timeout_seconds=12,
+                session_id="vision-session",
+            )
+        factory.assert_called_once_with(
+            model="switchyard/vision-test", timeout_seconds=12
+        )
+        self.assertEqual(result.selected_model, "nemotron-test")
+        factory.return_value.chat_completion.assert_awaited_once()
 
     async def test_chat_completion_rejects_missing_routing_header(self):
         def handler(_: httpx.Request) -> httpx.Response:

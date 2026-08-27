@@ -29,3 +29,12 @@ efficient_target = "efficient"
 capable_target = "capable"
 picker = "efficient_first"
 confidence_threshold = 0.5
+
+# The application has already made the deterministic IoU decision before this
+# route is called. Low-IoU candidates require the multimodal capable target;
+# the passthrough keeps that inference inside Switchyard accounting without
+# pretending that coding-agent Stage Router signals made the vision decision.
+[routes.exitwatch_vision]
+id = "switchyard/exitwatch-vision"
+type = "passthrough"
+target = "capable"

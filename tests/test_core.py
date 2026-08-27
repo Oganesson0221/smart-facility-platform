@@ -72,6 +72,7 @@ from app.services.scene_reasoning import (
     validate_fire_exit_obstruction,
 )
 from app.services.sop import search_sops
+from app.services.switchyard_client import RoutedCompletion
 
 
 class FakeScalar:
@@ -1420,8 +1421,13 @@ class SupportServiceTests(unittest.TestCase):
             ]
         }
         with patch(
-            "app.services.scene_reasoning.chat_completions",
-            AsyncMock(side_effect=[truncated, complete]),
+            "app.services.scene_reasoning.routed_vision_completion",
+            AsyncMock(
+                side_effect=[
+                    RoutedCompletion(truncated, settings.vision_model, (), 1.0),
+                    RoutedCompletion(complete, settings.vision_model, (), 1.0),
+                ]
+            ),
         ) as completion:
             content = asyncio.run(
                 _call_vision_model("prompt", b"image", max_response_tokens=120)

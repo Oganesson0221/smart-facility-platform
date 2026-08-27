@@ -7,7 +7,7 @@
   <title>AI Routing · Smart Facility</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css?v=enterprise-v4">
-  <link rel="stylesheet" href="/static/switchyard.css?v=4">
+  <link rel="stylesheet" href="/static/switchyard.css?v=5">
 </head>
 <body class="routing-page">
   <main class="routing-shell">
@@ -16,7 +16,7 @@
         <a class="back-link" href="/">← Smart Facility dashboard</a>
         <p class="eyebrow mint">NVIDIA NeMo Switchyard</p>
         <h1>AI routing</h1>
-        <p class="routing-intro">Live Stage Router health, target availability, and official routing decisions.</p>
+        <p class="routing-intro">Live Stage Router and vision passthrough health, target availability, and official Switchyard accounting.</p>
       </div>
       <button class="button primary" id="refreshRouting">Refresh status</button>
     </header>
@@ -49,14 +49,14 @@
 
     <section class="routing-panel">
       <div class="panel-heading">
-        <div><p class="eyebrow">Current deployment</p><h2>Stage Router</h2></div>
+        <div><p class="eyebrow">Current deployment</p><h2>Switchyard routes</h2></div>
         <span class="route-pill" id="routeId">Loading route</span>
       </div>
       <div class="routing-facts">
         <div><small>PICKER</small><strong>efficient_first</strong></div>
         <div><small>CONFIDENCE</small><strong>0.5</strong></div>
+        <div><small>VISION ROUTE</small><strong id="visionRouteId">switchyard/exitwatch-vision</strong></div>
         <div><small>LATEST MODEL</small><strong id="latestModel">No routed request yet</strong></div>
-        <div><small>LATEST TIER</small><strong id="latestTier">—</strong></div>
       </div>
       <p class="latest-time" id="latestTime">Routing records appear after a completed request.</p>
     </section>
@@ -65,7 +65,7 @@
       <div class="panel-heading">
         <div><p class="eyebrow">Request architecture</p><h2>Routing and escalation paths</h2></div>
       </div>
-      <p class="panel-copy">These are separate routes. Switchyard dynamically chooses a model for general orchestration; Telegram questions are pinned to Qwen after local retrieval; camera incidents use a deterministic IoU gate before spending vision tokens.</p>
+      <p class="panel-copy">Both model paths below cross Switchyard. General orchestration uses the Stage Router; camera incidents use a deterministic local IoU gate and send only ambiguous images through a Nemotron passthrough route.</p>
       <div class="architecture-diagram" role="img" aria-label="Smart Facility Switchyard request architecture">
         <div class="architecture-split">
           <div class="architecture-path counted-path">
@@ -81,18 +81,8 @@
               <div class="architecture-node capable-node"><small>CAPABLE</small><strong>Nemotron Omni 30B</strong><span>critical / override · port 8002</span></div>
             </div>
           </div>
-          <div class="architecture-path telegram-path">
-            <div class="path-heading"><span class="path-label">2 · Telegram operator question</span><span class="accounting-badge vllm-counted">Qwen vLLM counted</span></div>
-            <div class="architecture-node client-node"><small>PERSON</small><strong>Telegram operator</strong><span>free-text safety question</span></div>
-            <span class="architecture-arrow">→</span>
-            <div class="architecture-node agent-node"><small>BOT HANDLER</small><strong>FastAPI</strong><span>known answers need no model</span></div>
-            <span class="architecture-arrow">→</span>
-            <div class="architecture-node tool-node"><small>LOCAL RAG</small><strong>Incident + SOP retrieval</strong><span>no model tokens</span></div>
-            <span class="architecture-arrow">→</span>
-            <div class="architecture-node efficient-node"><small>PINNED ANSWER MODEL</small><strong id="telegramQueryModel">Qwen 2.5 7B</strong><span>grounded reply · port 8001</span></div>
-          </div>
           <div class="architecture-path direct-path">
-            <div class="path-heading"><span class="path-label">3 · Camera incident vision gate</span><span class="accounting-badge mixed-counting">Conditional tokens</span></div>
+            <div class="path-heading"><span class="path-label">2 · Camera incident vision gate</span><span class="accounting-badge switchyard-counted">Low-IoU calls counted</span></div>
             <div class="architecture-node client-node"><small>CAMERA / UPLOAD</small><strong>Fire-exit image</strong><span>local evidence frame</span></div>
             <span class="architecture-arrow">→</span>
             <div class="architecture-node tool-node"><small>LOCAL TOOLS</small><strong>YOLO + SAM</strong><span>detection and segmentation</span></div>
@@ -100,18 +90,17 @@
             <div class="architecture-node router-node"><small>IoU GATE</small><strong>SAM mask / exit zone</strong><span>threshold <b id="visionIouThreshold">70%</b></span></div>
             <span class="architecture-arrow branch-arrow">↗<br>↘</span>
             <div class="architecture-targets">
-              <div class="architecture-node zero-token-node"><small>IoU ≥ <b class="vision-threshold-copy">70%</b></small><strong>Local SOP + Telegram</strong><span>zero LLM tokens</span></div>
-              <div class="architecture-node capable-node"><small>IoU &lt; <b class="vision-threshold-copy">70%</b> / unavailable</small><strong>Nemotron Omni 30B</strong><span>confirm before incident · port 8002</span></div>
+              <div class="architecture-node zero-token-node"><small>IoU ≥ <b class="vision-threshold-copy">70%</b></small><strong>Local incident workflow</strong><span>zero LLM tokens · no Switchyard call</span></div>
+              <div class="architecture-node switchyard-node"><small>IoU &lt; <b class="vision-threshold-copy">70%</b> / unavailable</small><strong id="visionRouteArchitecture">switchyard/exitwatch-vision</strong><span>passthrough → Nemotron · ports 4000 → 8002</span></div>
             </div>
           </div>
         </div>
       </div>
       <div class="accounting-legend" aria-label="Token accounting boundaries">
-        <div><span class="legend-dot switchyard-dot"></span><strong>Switchyard stats</strong><small>Only lane 1 appears in the table below.</small></div>
-        <div><span class="legend-dot qwen-dot"></span><strong>Qwen vLLM metrics</strong><small>Telegram RAG tokens are measured on port 8001.</small></div>
-        <div><span class="legend-dot vision-dot"></span><strong>Nemotron vLLM metrics</strong><small>Only ambiguous vision calls are measured on port 8002.</small></div>
+        <div><span class="legend-dot switchyard-dot"></span><strong>Stage Router accounting</strong><small>Lane 1 records Qwen or Nemotron, tokens, latency, and routing decisions.</small></div>
+        <div><span class="legend-dot vision-dot"></span><strong>Vision passthrough accounting</strong><small>Lane 2 records only low-IoU Nemotron calls; high-IoU cases spend zero LLM tokens.</small></div>
       </div>
-      <p class="architecture-note">For lane 1, the selected model is returned in <code>x-model-router-selected-model</code>. Switchyard updates <code>/v1/stats</code>, <code>/metrics</code>, and the routing JSONL only after that routed response completes.</p>
+      <p class="architecture-note">Both routes return the selected backend in <code>x-model-router-selected-model</code>. Switchyard updates <code>/v1/stats</code>, <code>/metrics</code>, and the routing JSONL only after a routed response completes.</p>
     </section>
 
     <section class="routing-panel">
@@ -130,7 +119,7 @@
           <tbody id="modelUsageBody"><tr><td colspan="8">Waiting for routing statistics.</td></tr></tbody>
         </table>
       </div>
-      <p class="architecture-note">These counters are cumulative since Switchyard started or <code>POST /v1/stats/reset</code> was called.</p>
+      <p class="architecture-note">These counters aggregate the Stage Router and vision passthrough routes. They are cumulative since Switchyard started or <code>POST /v1/stats/reset</code> was called.</p>
     </section>
 
     <section class="routing-panel">
@@ -165,6 +154,6 @@
       <div class="decision-list" id="decisionList"><p>No routing decisions recorded yet.</p></div>
     </section>
   </main>
-  <script src="/static/switchyard.js?v=4"></script>
+  <script src="/static/switchyard.js?v=5"></script>
 </body>
 </html>

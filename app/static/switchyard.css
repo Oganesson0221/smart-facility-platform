@@ -29,14 +29,11 @@
 .architecture-lane, .architecture-path { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .architecture-split { display: grid; gap: 14px; }
 .architecture-path { position: relative; padding: 48px 14px 14px; border: 1px dashed rgba(6, 114, 206, .24); border-radius: 12px; }
-.telegram-path { border-color: rgba(34, 151, 106, .35); }
 .direct-path { border-color: rgba(223, 156, 45, .35); }
 .path-heading { position: absolute; inset: 10px 14px auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .path-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
 .accounting-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: 8px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
 .switchyard-counted { color: #0863a8; background: rgba(6, 114, 206, .09); }
-.vllm-counted { color: #16704e; background: rgba(34, 151, 106, .10); }
-.mixed-counting { color: #8c5c0c; background: rgba(223, 156, 45, .12); }
 .architecture-node { display: grid; gap: 5px; min-width: 140px; max-width: 220px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow-soft); }
 .architecture-node small, .usage-summary small { color: #61766b; font-size: 8px; font-weight: 800; letter-spacing: .13em; }
 .architecture-node strong { font-size: 12px; overflow-wrap: anywhere; }
@@ -50,13 +47,12 @@
 .architecture-targets { display: grid; gap: 8px; }
 .architecture-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; }
 .architecture-note code { color: var(--mint); }
-.accounting-legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
+.accounting-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
 .accounting-legend > div { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }
 .accounting-legend strong { font-size: 10px; }
 .accounting-legend small { grid-column: 2; color: var(--muted); font-size: 9px; line-height: 1.4; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
 .switchyard-dot { background: #0672ce; }
-.qwen-dot { background: #22976a; }
 .vision-dot { background: #7e57c2; }
 .usage-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
 .usage-summary > div { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-inset); }

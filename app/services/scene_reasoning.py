@@ -3,6 +3,7 @@ import logging
 import re
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 import cv2
 import httpx
@@ -12,11 +13,11 @@ from app.config import settings
 from app.services.cv.types import Detection
 from app.services.nemo_agent_client import orchestrate_fire_exit_validation
 from app.services.nemo_agent_client import orchestrate_scene_assessment
-from app.services.openai_compat import chat_completions
 from app.services.openai_compat import coerce_text_content
 from app.services.openai_compat import extract_chat_message_content
 from app.services.openai_compat import list_models
 from app.services.openai_compat import multimodal_user_message
+from app.services.switchyard_client import routed_vision_completion
 
 
 LOGGER = logging.getLogger(__name__)
@@ -231,6 +232,7 @@ async def _call_vision_model(
         ),
     )
     timeout = timeout_seconds if timeout_seconds is not None else settings.vision_timeout_seconds
+    session_id = f"exitwatch-vision-{uuid4().hex}"
     try:
         payload: dict[str, Any] = {}
         token_budgets = (response_tokens, max(512, response_tokens * 2))
@@ -243,11 +245,7 @@ async def _call_vision_model(
                 token_budget,
                 attempt,
             )
-            payload = await chat_completions(
-                base_url=settings.vision_base_url,
-                api_key=settings.vision_api_key,
-                timeout_seconds=timeout,
-                model=settings.vision_model,
+            completion = await routed_vision_completion(
                 messages=multimodal_user_message(prompt, image_bytes),
                 temperature=0,
                 max_tokens=token_budget,
@@ -257,6 +255,15 @@ async def _call_vision_model(
                         "enable_thinking": settings.vision_enable_thinking,
                     }
                 },
+                timeout_seconds=timeout,
+                session_id=session_id,
+            )
+            payload = completion.payload
+            LOGGER.info(
+                "Vision route=%s selected_model=%s fallback=%s",
+                settings.switchyard_vision_model,
+                completion.selected_model,
+                completion.fallback_used,
             )
             choices = payload.get("choices", [])
             finish_reason = (

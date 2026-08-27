@@ -27,6 +27,7 @@ from app.services.switchyard_client import SwitchyardClient
 EFFICIENT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 CAPABLE_MODEL = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
 ROUTE = "switchyard/exitwatch-stage"
+VISION_ROUTE = "switchyard/exitwatch-vision"
 
 
 class MockOpenAIHandler(BaseHTTPRequestHandler):
@@ -42,7 +43,22 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
         }:
             self._send(404, {"error": {"message": "unknown mock request"}})
             return
+        multimodal = any(
+            isinstance(message.get("content"), list)
+            for message in request.get("messages", [])
+            if isinstance(message, dict)
+        )
+        if multimodal:
+            blocks = request["messages"][-1]["content"]
+            if not any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for block in blocks
+            ) or request.get("response_format") != {"type": "json_object"}:
+                self._send(400, {"error": {"message": "multimodal fields were not preserved"}})
+                return
+            self.server.multimodal_seen = True
         self.server.seen_models.append(model)
+        self.server.seen_requests.append(request)
         self._send(
             200,
             {
@@ -83,6 +99,8 @@ class MockOpenAIServer(ThreadingHTTPServer):
     def __init__(self):
         super().__init__(("127.0.0.1", 0), MockOpenAIHandler)
         self.seen_models: list[str] = []
+        self.seen_requests: list[dict] = []
+        self.multimodal_seen = False
 
 
 def find_server() -> str:
@@ -149,6 +167,37 @@ async def verify(base_url: str):
             f"VERIFIED scenario={scenario} selected_model={result.selected_model} "
             f"decision_source={expected_source}"
         )
+    vision = SwitchyardClient(
+        base_url=base_url,
+        model=VISION_ROUTE,
+        api_key="",
+        timeout_seconds=10,
+    )
+    result = await vision.chat_completion(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Validate this low-IoU candidate."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+                    },
+                ],
+            }
+        ],
+        response_format={"type": "json_object"},
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        session_id="exitwatch-vision-integration",
+    )
+    if result.selected_model != CAPABLE_MODEL:
+        raise AssertionError(
+            f"vision passthrough: expected {CAPABLE_MODEL}, got {result.selected_model}"
+        )
+    print(
+        f"VERIFIED vision_route={VISION_ROUTE} selected_model={result.selected_model} "
+        "multimodal_forwarded=accepted"
+    )
 
 
 def main():
@@ -184,6 +233,11 @@ efficient_target = "efficient"
 capable_target = "capable"
 picker = "efficient_first"
 confidence_threshold = 0.5
+
+[routes.exitwatch_vision]
+id = "{VISION_ROUTE}"
+type = "passthrough"
+target = "capable"
 ''',
                 encoding="utf-8",
             )
@@ -210,6 +264,8 @@ confidence_threshold = 0.5
             base_url = f"http://127.0.0.1:{switchyard_port}"
             wait_for_health(f"{base_url}/health", process)
             asyncio.run(verify(base_url))
+            if not upstream.multimodal_seen:
+                raise AssertionError("vision passthrough did not preserve the image payload")
             print(f"VERIFIED real switchyard-server requests={upstream.seen_models}")
     finally:
         if process is not None and process.poll() is None:

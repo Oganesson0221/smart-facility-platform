@@ -215,11 +215,10 @@ async def health(db: Session = Depends(get_db)):
 async def switchyard_status():
     status = await SwitchyardClient().status()
     status["application_routing"] = {
-        "telegram_query_model": settings.telegram_query_model or settings.llm_model,
-        "telegram_query_route": "pinned_qwen_rag",
         "vision_iou_threshold": settings.vision_validation_iou_threshold,
-        "high_iou_action": "deterministic_sop_and_telegram",
-        "low_iou_action": "nemotron_vision_validation",
+        "high_iou_action": "deterministic_incident_workflow",
+        "low_iou_action": "switchyard_vision_passthrough",
+        "vision_route": settings.switchyard_vision_model,
     }
     return status
 

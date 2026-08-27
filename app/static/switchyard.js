@@ -115,7 +115,7 @@ async function loadStatus() {
       setCard("#switchyardCard", "#switchyardState", "#switchyardDetail", "error", "Switchyard disabled", status.detail);
     } else if (!status.reachable) {
       setCard("#switchyardCard", "#switchyardState", "#switchyardDetail", "error", "Switchyard offline", status.detail);
-    } else if (status.route_available === false) {
+    } else if (status.route_available === false || status.vision_route_available === false) {
       setCard("#switchyardCard", "#switchyardState", "#switchyardDetail", "error", "Route unavailable", status.detail);
     } else {
       setCard("#switchyardCard", "#switchyardState", "#switchyardDetail", "ready", "Switchyard online", `${status.route} · ${status.base_url}`);
@@ -128,17 +128,15 @@ async function loadStatus() {
 
     const latest = status.latest_routing;
     const applicationRouting = status.application_routing || {};
-    $("#telegramQueryModel").textContent = text(
-      applicationRouting.telegram_query_model,
-      "Qwen/Qwen2.5-7B-Instruct",
-    );
+    const visionRoute = text(applicationRouting.vision_route, "switchyard/exitwatch-vision");
+    $("#visionRouteId").textContent = visionRoute;
+    $("#visionRouteArchitecture").textContent = visionRoute;
     const visionThreshold = `${formatNumber(Number(applicationRouting.vision_iou_threshold ?? 0.7) * 100, 1)}%`;
     $("#visionIouThreshold").textContent = visionThreshold;
     document.querySelectorAll(".vision-threshold-copy").forEach(item => {
       item.textContent = visionThreshold;
     });
     $("#latestModel").textContent = text(latest?.model, "No routed request yet");
-    $("#latestTier").textContent = text(latest?.tier);
     $("#latestTime").textContent = latest?.ts
       ? `${latest.ts} · ${text(latest.total_tokens, 0)} tokens`
       : "Routing records appear after a completed request.";

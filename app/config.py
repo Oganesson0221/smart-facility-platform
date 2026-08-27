@@ -64,9 +64,11 @@ class Settings(BaseSettings):
     switchyard_enabled: bool = True
     switchyard_base_url: str = "http://127.0.0.1:4000"
     switchyard_model: str = "switchyard/exitwatch-stage"
+    switchyard_vision_model: str = "switchyard/exitwatch-vision"
     switchyard_api_key: str = ""
     switchyard_timeout_seconds: float = 60.0
     switchyard_fallback_enabled: bool = True
+    switchyard_vision_fallback_enabled: bool = False
     switchyard_routing_log_path: str = "logs/switchyard-routing.jsonl"
     switchyard_ui_enabled: bool = True
 

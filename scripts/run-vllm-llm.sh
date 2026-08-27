@@ -47,7 +47,7 @@ else
   model_source="$served_model_name"
 fi
 max_model_len="${LLM_MAX_MODEL_LEN:-8192}"
-gpu_memory_utilization="${LLM_GPU_MEMORY_UTILIZATION:-0.35}"
+gpu_memory_utilization="${LLM_GPU_MEMORY_UTILIZATION:-0.32}"
 tool_call_parser="${LLM_TOOL_CALL_PARSER:-}"
 reasoning_parser="${LLM_REASONING_PARSER:-}"
 llm_api_key="${LLM_API_KEY:-}"
